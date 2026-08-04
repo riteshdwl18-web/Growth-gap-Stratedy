@@ -123,14 +123,6 @@ function confirmAndStop(runId: string): void {
   )
 }
 
-function requestFilteredRunsDownload(): void {
-  openActionConfirm(
-    'Download Filtered Runs CSV',
-    'Are you sure you want to download the filtered runs CSV?',
-    () => controller.downloadFilteredRunsCsv(),
-  )
-}
-
 function downloadRunCsv(runId: string): void {
   openActionConfirm(
     'Download Run CSV',
@@ -156,23 +148,15 @@ function openRunDetails(runId: string): void {
             <div>Recent Runs</div>
             <div class="text-body-2 text-medium-emphasis">Track status, stop active tasks, and open any run result set</div>
           </div>
-          <div class="d-flex ga-2 align-center header-actions">
-            <v-btn class="action-btn" variant="tonal" :loading="controller.loading" @click="controller.fetchRuns">
-              Refresh
-            </v-btn>
-            <v-btn class="action-btn" variant="flat" color="secondary" @click="requestFilteredRunsDownload">
-              Export Filtered CSV
-            </v-btn>
-          </div>
         </v-card-title>
 
         <v-card-text>
           <v-sheet class="info-band mb-3" rounded="lg">
             <div class="d-flex ga-2 flex-wrap align-center">
               <v-chip size="small" color="primary" variant="tonal">Step 2: Monitor Runs</v-chip>
-              <v-chip size="small" variant="outlined">Active {{ activeRuns }}</v-chip>
-              <v-chip size="small" variant="outlined">Completed {{ completedRuns }}</v-chip>
-              <v-chip size="small" variant="outlined">Failed {{ failedRuns }}</v-chip>
+              <v-chip size="small" color="info" variant="tonal">Active {{ activeRuns }}</v-chip>
+              <v-chip size="small" color="success" variant="tonal">Completed {{ completedRuns }}</v-chip>
+              <v-chip size="small" color="error" variant="tonal">Failed {{ failedRuns }}</v-chip>
             </div>
           </v-sheet>
 

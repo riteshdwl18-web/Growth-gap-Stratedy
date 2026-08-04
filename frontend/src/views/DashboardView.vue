@@ -21,7 +21,7 @@ const quickSteps = [
   },
   {
     title: 'Step 3. Review + Export',
-    detail: 'Open Runs & Results to inspect detailed output and export CSV.',
+    detail: 'Review symbol-level results, monitor runs, and export filtered output.',
   },
 ]
 
@@ -127,7 +127,6 @@ onMounted(() => {
             <div>Workflow Guide</div>
             <div class="text-body-2 text-medium-emphasis">Use this sequence for fastest and safest execution.</div>
           </div>
-          <v-btn variant="tonal" color="secondary" @click="goToRuns">Open Runs & Results</v-btn>
         </v-card-title>
         <v-card-text>
           <v-row>
@@ -148,8 +147,8 @@ onMounted(() => {
     <v-col cols="12">
       <v-card class="h-100 workflow-card">
         <v-card-title class="d-flex flex-column align-start ga-1 card-heading">
-          <span>CSV Workflow</span>
-          <span class="text-body-2 text-medium-emphasis">Validate first, then run and process this same sheet</span>
+          <span>Screening Run Setup</span>
+          <span class="text-body-2 text-medium-emphasis">Validate the input list, then launch and monitor the screening run.</span>
         </v-card-title>
         <v-card-text>
           <v-stepper :model-value="workflowStep" alt-labels flat class="mb-4 workflow-stepper">

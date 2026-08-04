@@ -9,17 +9,14 @@ const controller = reactive(useRunsController())
 const route = useRoute()
 const router = useRouter()
 const authUsername = ref('')
+const sidebarCollapsed = ref(true)
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'app.sidebarCollapsed'
 
 const navItems = [
-  { label: 'Dashboard', path: '/dashboard' },
-  { label: 'Runs & Results', path: '/runs' },
+  { label: 'Dashboard', path: '/dashboard', icon: 'mdi-view-dashboard-outline' },
+  { label: 'Runs & Results', path: '/runs', icon: 'mdi-chart-timeline-variant' },
 ]
 
-const workflowStages = [
-  { id: 1, label: 'Dashboard', hint: 'Validate CSV and start a run' },
-  { id: 2, label: 'Runs', hint: 'Monitor status and control active runs' },
-  { id: 3, label: 'Results', hint: 'Inspect output and export data' },
-]
 
 const activePath = computed(() => route.path)
 const isLoginRoute = computed(() => route.path === '/login' || route.path === '/signup')
@@ -34,19 +31,25 @@ const userInitials = computed(() => {
   }
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
 })
-const activeStage = computed(() => {
-  if (route.path.startsWith('/runs/')) {
-    return 3
-  }
-  if (route.path.startsWith('/runs')) {
-    return 2
-  }
-  return 1
-})
+const sidebarMdCols = computed(() => (sidebarCollapsed.value ? 1 : 2))
+const sidebarLgCols = computed(() => (sidebarCollapsed.value ? 1 : 2))
+
+function isNavItemActive(path: string): boolean {
+  return activePath.value === path || activePath.value.startsWith(`${path}/`)
+}
 
 function goTo(path: string): void {
   if (route.path !== path) {
     void router.push(path)
+  }
+}
+
+function toggleSidebar(): void {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed.value ? '1' : '0')
+  } catch {
+    // Ignore storage write failures.
   }
 }
 
@@ -70,6 +73,12 @@ async function ensureAppInitialized(): Promise<void> {
 }
 
 onMounted(async () => {
+  try {
+    const persisted = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
+    sidebarCollapsed.value = persisted === null ? true : persisted === '1'
+  } catch {
+    sidebarCollapsed.value = true
+  }
   await refreshAuthStatus()
   await ensureAppInitialized()
 })
@@ -134,38 +143,69 @@ onUnmounted(() => {
           </div>
         </v-sheet>
 
-        <v-sheet class="nav-strip mb-5" rounded="xl">
-          <div class="d-flex ga-2 flex-wrap">
-            <v-btn
-              v-for="item in navItems"
-              :key="item.path"
-              :variant="activePath === item.path ? 'flat' : 'tonal'"
-              :color="activePath === item.path ? 'primary' : 'secondary'"
-              @click="goTo(item.path)"
-            >
-              {{ item.label }}
-            </v-btn>
-          </div>
-        </v-sheet>
-
-        <v-sheet class="workflow-rail mb-5" rounded="xl">
-          <div class="workflow-rail-grid">
-            <div
-              v-for="stage in workflowStages"
-              :key="stage.id"
-              class="workflow-node"
-              :class="{ 'is-active': activeStage === stage.id, 'is-complete': activeStage > stage.id }"
-            >
-              <div class="workflow-dot">{{ stage.id }}</div>
-              <div>
-                <div class="workflow-label">{{ stage.label }}</div>
-                <div class="workflow-hint">{{ stage.hint }}</div>
+        <v-row class="layout-grid" align="start">
+          <v-col
+            cols="12"
+            :md="sidebarMdCols"
+            :lg="sidebarLgCols"
+            class="layout-sidebar-col"
+            :class="{ 'sidebar-col-collapsed': sidebarCollapsed }"
+          >
+            <v-sheet class="left-nav-panel" rounded="xl" :class="{ 'is-collapsed': sidebarCollapsed }">
+              <div class="left-nav-header">
+                <div v-if="!sidebarCollapsed">
+                  <div class="left-nav-title">Screening Console</div>
+                  <div class="left-nav-subtitle">Runs, Results, and Export</div>
+                </div>
+                <v-tooltip :text="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'" location="right">
+                  <template #activator="{ props }">
+                    <v-btn
+                      v-bind="props"
+                      variant="text"
+                      size="small"
+                      color="secondary"
+                      :icon="sidebarCollapsed ? 'mdi-chevron-right' : 'mdi-chevron-left'"
+                      class="sidebar-toggle-btn d-none d-md-inline-flex"
+                      @click="toggleSidebar"
+                    />
+                  </template>
+                </v-tooltip>
               </div>
-            </div>
-          </div>
-        </v-sheet>
 
-        <RouterView />
+              <v-list class="left-nav-list" nav density="comfortable">
+                <v-list-item
+                  v-for="item in navItems"
+                  :key="item.path"
+                  :prepend-icon="item.icon"
+                  :title="sidebarCollapsed ? '' : item.label"
+                  rounded="lg"
+                  :active="isNavItemActive(item.path)"
+                  :class="{ 'left-nav-item-collapsed': sidebarCollapsed }"
+                  @click="goTo(item.path)"
+                />
+              </v-list>
+            </v-sheet>
+          </v-col>
+
+          <v-col cols="12" md="9" lg="10">
+            <v-sheet class="mobile-nav-strip mb-4 d-md-none" rounded="xl">
+              <div class="d-flex ga-2 flex-wrap">
+                <v-btn
+                  v-for="item in navItems"
+                  :key="item.path"
+                  :prepend-icon="item.icon"
+                  :variant="activePath === item.path ? 'flat' : 'tonal'"
+                  :color="activePath === item.path ? 'primary' : 'secondary'"
+                  @click="goTo(item.path)"
+                >
+                  {{ item.label }}
+                </v-btn>
+              </div>
+            </v-sheet>
+
+            <RouterView />
+          </v-col>
+        </v-row>
       </v-container>
     </v-main>
     </template>
