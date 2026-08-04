@@ -1,0 +1,15 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+celery>=5.4.0
+redis>=5.0.0
+pydantic>=2.7.0
+python-multipart>=0.0.9
+
+# SwingTrading engine dependencies (used by backend/app/services/screener.py)
+pandas>=2.2.0
+yfinance>=0.2.54
+openpyxl>=3.1.2
+numpy>=1.26.0
+gspread>=6.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
