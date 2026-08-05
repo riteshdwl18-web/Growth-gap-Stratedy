@@ -34,8 +34,13 @@ class UploadWorkflowRunRequest(BaseModel):
 class RunSummary(BaseModel):
     run_id: str
     status: str
+    stage: str = "queued"
+    status_message: str = ""
     created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     stopped_at: datetime | None = None
+    cooldown_until: datetime | None = None
     input_universe: str
     output_mode: str
     refresh: bool
@@ -44,14 +49,17 @@ class RunSummary(BaseModel):
     pass_count: int = 0
     fail_count: int = 0
     skipped_count: int = 0
+    retry_count: int = 0
 
 
 RunSortBy = Literal[
     "created_at",
     "status",
+    "stage",
     "input_universe",
     "output_mode",
     "processed",
+    "retry_count",
     "pass_count",
     "fail_count",
     "skipped_count",

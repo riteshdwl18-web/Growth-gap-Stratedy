@@ -44,6 +44,7 @@ from app.services.screener import (
     build_results_csv_payload,
     create_run,
     create_run_from_upload,
+    create_retry_run_from_failed,
     generate_run_csv,
     get_run,
     get_run_results,
@@ -339,14 +340,26 @@ def stop_existing_run(run_id: str, request: Request) -> RunSummary:
     return run
 
 
+@app.post("/api/runs/{run_id}/retry-failed", response_model=RunSummary)
+def retry_failed_rows(run_id: str, request: Request) -> RunSummary:
+    username = _auth_username(request)
+    try:
+        return create_retry_run_from_failed(source_run_id=run_id, username=username)
+    except RuntimeError as err:
+        message = str(err)
+        if message == "Source run not found":
+            raise HTTPException(status_code=404, detail=message) from err
+        raise HTTPException(status_code=409, detail=message) from err
+
+
 @app.get("/api/runs/{run_id}/download.csv")
 def download_run_csv(run_id: str, request: Request) -> FileResponse:
     username = _auth_username(request)
     run = get_run(run_id, username=username)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status != "completed":
-        raise HTTPException(status_code=409, detail="CSV is available only for completed runs")
+    if run.status not in {"completed", "partial_completed"}:
+        raise HTTPException(status_code=409, detail="CSV is available only for completed or partial completed runs")
 
     csv_path = generate_run_csv(run_id, username=username)
     if csv_path is None:

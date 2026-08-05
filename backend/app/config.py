@@ -40,6 +40,16 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _env_list(key: str, default: list[str]) -> list[str]:
     raw = os.getenv(key)
     if raw is None:
@@ -65,6 +75,12 @@ class Settings(BaseModel):
         "http://localhost:8000/api/auth/google/callback",
     )
     oauth_state_ttl_minutes: int = _env_int("OAUTH_STATE_TTL_MINUTES", 10)
+    scraper_min_delay_seconds: float = _env_float("SCRAPER_MIN_DELAY_SECONDS", 1.2)
+    scraper_max_delay_seconds: float = _env_float("SCRAPER_MAX_DELAY_SECONDS", 2.2)
+    scraper_retry_max_attempts: int = _env_int("SCRAPER_RETRY_MAX_ATTEMPTS", 3)
+    scraper_backoff_base_seconds: float = _env_float("SCRAPER_BACKOFF_BASE_SECONDS", 15.0)
+    scraper_backoff_max_seconds: float = _env_float("SCRAPER_BACKOFF_MAX_SECONDS", 180.0)
+    scraper_backoff_jitter_seconds: float = _env_float("SCRAPER_BACKOFF_JITTER_SECONDS", 1.5)
     cors_origins: list[str] = _env_list(
         "CORS_ORIGINS",
         [

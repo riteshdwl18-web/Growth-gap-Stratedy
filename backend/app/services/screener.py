@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib
+import random
 import re
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from urllib import request as urllib_request
 from uuid import uuid4
 
 from ..celery_app import celery_app
+from ..config import settings
 from ..models import RunCreateRequest, UploadRunCreateRequest, RunSummary
 from ..storage import (
     append_result,
@@ -32,6 +35,18 @@ from ..storage import (
 LIVE_PRICE_HTTP_TIMEOUT_SECONDS = 2.5
 LIVE_PRICE_MAX_WORKERS = 8
 LIVE_PRICE_CACHE_TTL_HOURS = 24
+ACTIVE_RUN_STATUSES = {"queued", "preparing", "running", "cooling_down"}
+RETRYABLE_SCRAPE_ERROR_HINTS = (
+    "429",
+    "too many",
+    "rate limit",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "connection reset",
+    "connection aborted",
+    "service unavailable",
+)
 
 
 def _start_local_fallback_worker(run_id: str) -> None:
@@ -79,9 +94,14 @@ def create_run(payload: RunCreateRequest, username: str) -> RunSummary:
     payload_dict = {
         "run_id": run_id,
         "status": "queued",
+        "stage": "queued",
+        "status_message": "Queued for processing",
         "created_at": now_iso(),
+        "started_at": None,
+        "finished_at": None,
         "username": username,
         "stopped_at": None,
+        "cooldown_until": None,
         "input_universe": payload.input_universe,
         "output_mode": payload.output_mode,
         "refresh": payload.refresh,
@@ -90,6 +110,7 @@ def create_run(payload: RunCreateRequest, username: str) -> RunSummary:
         "pass_count": 0,
         "fail_count": 0,
         "skipped_count": 0,
+        "retry_count": 0,
         "stop_requested": False,
         "source_type": "universe",
         "source_ref": payload.input_universe,
@@ -119,9 +140,14 @@ def create_run_from_upload(
     payload_dict = {
         "run_id": run_id,
         "status": "queued",
+        "stage": "queued",
+        "status_message": "Queued for processing",
         "created_at": now_iso(),
+        "started_at": None,
+        "finished_at": None,
         "username": username,
         "stopped_at": None,
+        "cooldown_until": None,
         "input_universe": f"upload:{filename}",
         "output_mode": payload.output_mode,
         "refresh": payload.refresh,
@@ -130,6 +156,7 @@ def create_run_from_upload(
         "pass_count": 0,
         "fail_count": 0,
         "skipped_count": 0,
+        "retry_count": 0,
         "stop_requested": False,
         "source_type": "upload",
         "source_ref": upload_id,
@@ -143,6 +170,123 @@ def create_run_from_upload(
         payload_dict["task_id"] = None
         payload_dict["enqueue_warning"] = f"Celery unavailable, using local fallback: {err}"
         _start_local_fallback_worker(run_id)
+    save_run(run_id, payload_dict)
+    return _to_run_summary(payload_dict)
+
+
+def _normalize_retry_symbol_to_nse_code(symbol: str) -> str:
+    normalized = symbol.strip().upper()
+    if not normalized:
+        return ""
+    if normalized.endswith(".NS") or normalized.endswith(".BO"):
+        return normalized[:-3].strip()
+    return normalized
+
+
+def _is_retry_candidate_result(row: dict[str, Any]) -> bool:
+    error_text = str(row.get("error", "")).strip()
+    # Retry only rows that failed due to data/network/scrape errors.
+    return bool(error_text)
+
+
+def _collect_retry_rows_from_results(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    seen_codes: set[str] = set()
+    retry_rows: list[dict[str, str]] = []
+
+    for row in rows:
+        if not _is_retry_candidate_result(row):
+            continue
+
+        nse_code = _normalize_retry_symbol_to_nse_code(str(row.get("symbol", "")))
+        if not nse_code:
+            continue
+
+        nse_key = nse_code.upper()
+        if nse_key in seen_codes:
+            continue
+        seen_codes.add(nse_key)
+
+        retry_rows.append(
+            {
+                "Name": str(row.get("name", "")).strip(),
+                "BSE Code": "",
+                "NSE Code": nse_code,
+                "ISIN Code": "",
+                "Industry Group": str(row.get("industry_group", "")).strip(),
+            }
+        )
+
+    return retry_rows
+
+
+def create_retry_run_from_failed(source_run_id: str, username: str) -> RunSummary:
+    source_run = load_run(source_run_id)
+    if not source_run:
+        raise RuntimeError("Source run not found")
+
+    owner = str(source_run.get("username", ""))
+    if owner != username:
+        raise RuntimeError("Source run not found")
+
+    source_status = str(source_run.get("status", "")).strip().lower()
+    if source_status in ACTIVE_RUN_STATUSES:
+        raise RuntimeError("Retry run can be started only after source run completes or stops")
+
+    source_rows = load_results(source_run_id)
+    retry_rows = _collect_retry_rows_from_results(source_rows)
+    if not retry_rows:
+        raise RuntimeError("No retryable error rows available")
+
+    _ensure_no_active_run(username)
+
+    run_id = str(uuid4())
+    source_ref = str(source_run.get("source_ref", ""))
+    source_type = str(source_run.get("source_type", "")).strip().lower()
+    if source_type == "upload" and source_ref:
+        input_universe = f"retry-failed:{source_ref}"
+    elif source_ref:
+        input_universe = f"retry-failed:{source_ref}"
+    else:
+        input_universe = f"retry-failed:{source_run_id[:8]}"
+
+    payload_dict = {
+        "run_id": run_id,
+        "status": "queued",
+        "stage": "queued",
+        "status_message": f"Queued retry for error rows from {source_run_id[:8]}",
+        "created_at": now_iso(),
+        "started_at": None,
+        "finished_at": None,
+        "username": username,
+        "stopped_at": None,
+        "cooldown_until": None,
+        "input_universe": input_universe,
+        "output_mode": str(source_run.get("output_mode", "csv")),
+        "refresh": bool(source_run.get("refresh", False)),
+        "processed": 0,
+        "total": len(retry_rows),
+        "pass_count": 0,
+        "fail_count": 0,
+        "skipped_count": 0,
+        "retry_count": 0,
+        "stop_requested": False,
+        "source_type": "retry_rows",
+        "source_ref": source_run_id,
+        "retry_source_run_id": source_run_id,
+        "inline_rows": retry_rows,
+    }
+
+    save_run(run_id, payload_dict)
+    save_results(run_id, [])
+
+    try:
+        task = celery_app.send_task("app.tasks.process_run_task", args=[run_id])
+        payload_dict["task_id"] = task.id
+    except Exception as err:
+        payload_dict["task_id"] = None
+        payload_dict["enqueue_warning"] = f"Celery unavailable, using local fallback: {err}"
+        _start_local_fallback_worker(run_id)
+
     save_run(run_id, payload_dict)
     return _to_run_summary(payload_dict)
 
@@ -329,7 +473,11 @@ def stop_run(run_id: str, username: str) -> RunSummary | None:
 
     run["stop_requested"] = True
     run["status"] = "stopped"
+    run["stage"] = "stopped"
+    run["status_message"] = "Stop requested by user"
     run["stopped_at"] = run.get("stopped_at") or now_iso()
+    run["finished_at"] = run.get("finished_at") or now_iso()
+    run["cooldown_until"] = None
 
     save_run(run_id, run)
     return _to_run_summary(run)
@@ -340,6 +488,114 @@ def _is_stop_requested(run_id: str) -> bool:
     if not run:
         return True
     return bool(run.get("stop_requested"))
+
+
+def _mark_run_stopped(run_id: str, message: str) -> None:
+    run = load_run(run_id)
+    if run is None:
+        return
+    run["status"] = "stopped"
+    run["stage"] = "stopped"
+    run["status_message"] = message
+    run["stopped_at"] = run.get("stopped_at") or now_iso()
+    run["finished_at"] = run.get("finished_at") or now_iso()
+    run["cooldown_until"] = None
+    save_run(run_id, run)
+
+
+def _mark_run_failed(run_id: str, message: str) -> None:
+    run = load_run(run_id)
+    if run is None:
+        return
+    run["status"] = "failed"
+    run["stage"] = "failed"
+    run["status_message"] = message
+    run["finished_at"] = run.get("finished_at") or now_iso()
+    run["cooldown_until"] = None
+    run["skipped_count"] = max(int(run.get("skipped_count", 0)), 1)
+    save_run(run_id, run)
+
+
+def _is_retryable_scrape_error(err: Exception) -> bool:
+    message = str(err).strip().lower()
+    if not message:
+        return False
+    return any(hint in message for hint in RETRYABLE_SCRAPE_ERROR_HINTS)
+
+
+def _build_backoff_delay_seconds(attempt_index: int) -> float:
+    base = max(0.1, float(settings.scraper_backoff_base_seconds))
+    maximum = max(base, float(settings.scraper_backoff_max_seconds))
+    jitter_max = max(0.0, float(settings.scraper_backoff_jitter_seconds))
+    exponential = min(maximum, base * (2 ** attempt_index))
+    return exponential + random.uniform(0.0, jitter_max)
+
+
+def _sleep_with_stop_check(run_id: str, total_seconds: float) -> bool:
+    remaining = max(0.0, total_seconds)
+    while remaining > 0:
+        if _is_stop_requested(run_id):
+            return False
+        interval = min(0.5, remaining)
+        time.sleep(interval)
+        remaining -= interval
+    return True
+
+
+def _random_request_delay_seconds() -> float:
+    min_delay = max(0.0, float(settings.scraper_min_delay_seconds))
+    max_delay = max(min_delay, float(settings.scraper_max_delay_seconds))
+    if max_delay == 0:
+        return 0.0
+    return random.uniform(min_delay, max_delay)
+
+
+def _run_scrape_with_retry(
+    module: Any,
+    run_id: str,
+    symbol: str,
+    refresh: bool,
+) -> tuple[dict[str, Any] | None, Exception | None, int, bool]:
+    max_attempts = max(1, int(settings.scraper_retry_max_attempts))
+    retries_used = 0
+
+    for attempt in range(max_attempts):
+        if _is_stop_requested(run_id):
+            return None, None, retries_used, True
+
+        try:
+            return module.check_sales_cagr(symbol, refresh=refresh), None, retries_used, False
+        except Exception as err:
+            is_last_attempt = attempt >= (max_attempts - 1)
+            if is_last_attempt or not _is_retryable_scrape_error(err):
+                return None, err, retries_used, False
+
+            retries_used += 1
+            cooldown_seconds = _build_backoff_delay_seconds(attempt)
+            cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
+
+            run = load_run(run_id)
+            if run is not None:
+                run["status"] = "cooling_down"
+                run["stage"] = "cooling_down"
+                run["cooldown_until"] = cooldown_until.isoformat()
+                run["status_message"] = (
+                    f"Rate-limit/network cooldown ({cooldown_seconds:.1f}s) before retrying {symbol}"
+                )
+                save_run(run_id, run)
+
+            if not _sleep_with_stop_check(run_id, cooldown_seconds):
+                return None, None, retries_used, True
+
+            run = load_run(run_id)
+            if run is not None:
+                run["status"] = "running"
+                run["stage"] = "running"
+                run["cooldown_until"] = None
+                run["status_message"] = f"Retrying {symbol}"
+                save_run(run_id, run)
+
+    return None, RuntimeError("Unexpected retry flow termination"), retries_used, False
 
 
 def _load_rows_from_universe(input_universe: str) -> list[dict[str, str]]:
@@ -380,19 +636,20 @@ def execute_run_task(run_id: str) -> None:
 
     try:
         run_username = str(run.get("username", ""))
-        if run.get("source_type") == "upload":
+        source_type = str(run.get("source_type", "")).strip().lower()
+        if source_type == "upload":
             rows = _load_rows_from_upload(str(run.get("source_ref", "")), run_username)
+        elif source_type == "retry_rows":
+            inline_rows = run.get("inline_rows", [])
+            if not isinstance(inline_rows, list):
+                raise ValueError("Retry rows payload is invalid")
+            rows = [dict(item) for item in inline_rows if isinstance(item, dict)]
         else:
             rows = _load_rows_from_universe(str(run.get("source_ref", "")))
 
         _execute_rows(run_id, rows, bool(run.get("refresh", False)))
     except Exception as err:
-        run = load_run(run_id)
-        if not run:
-            return
-        run["status"] = "failed"
-        run["skipped_count"] = max(int(run.get("skipped_count", 0)), 1)
-        save_run(run_id, run)
+        _mark_run_failed(run_id, f"Run failed before processing rows: {err}")
         append_result(
             run_id,
             {
@@ -408,41 +665,54 @@ def _execute_rows(run_id: str, rows: list[dict[str, str]], refresh: bool) -> Non
     try:
         module = _get_stock_screener_module()
     except Exception as err:
-        run = load_run(run_id)
-        if run is not None:
-            run["status"] = "failed"
-            run["skipped_count"] = max(int(run.get("skipped_count", 0)), 1)
-            save_run(run_id, run)
-            append_result(
-                run_id,
-                {
-                    "name": "",
-                    "symbol": "",
-                    "final_status": "",
-                    "error": f"Failed to load SwingTrading engine: {err}",
-                },
-            )
+        _mark_run_failed(run_id, f"Failed to load SwingTrading engine: {err}")
+        append_result(
+            run_id,
+            {
+                "name": "",
+                "symbol": "",
+                "final_status": "",
+                "error": f"Failed to load SwingTrading engine: {err}",
+            },
+        )
         return
 
     run = load_run(run_id)
     if not run:
         return
     if run.get("status") == "stopped" or _is_stop_requested(run_id):
-        run["status"] = "stopped"
-        run["stopped_at"] = run.get("stopped_at") or now_iso()
-        save_run(run_id, run)
+        _mark_run_stopped(run_id, "Stopped before processing started")
         return
-    run["status"] = "running"
+
+    run["status"] = "preparing"
+    run["stage"] = "preparing"
+    run["status_message"] = "Preparing and validating CSV rows"
+    run["started_at"] = run.get("started_at") or now_iso()
+    run["finished_at"] = None
+    run["cooldown_until"] = None
+    run["stop_requested"] = False
     run["total"] = len(rows)
+    run["processed"] = 0
+    run["pass_count"] = 0
+    run["fail_count"] = 0
+    run["skipped_count"] = 0
+    run["retry_count"] = 0
     save_run(run_id, run)
 
-    for row in rows:
+    run = load_run(run_id)
+    if run is None:
+        return
+    run["status"] = "running"
+    run["stage"] = "running"
+    run["status_message"] = "Processing symbols"
+    save_run(run_id, run)
+
+    seen_symbols: set[str] = set()
+    total_rows = len(rows)
+
+    for index, row in enumerate(rows):
         if _is_stop_requested(run_id):
-            run = load_run(run_id)
-            if run is not None:
-                run["status"] = "stopped"
-                run["stopped_at"] = run.get("stopped_at") or now_iso()
-                save_run(run_id, run)
+            _mark_run_stopped(run_id, "Stopped while processing symbols")
             return
 
         nse_code = (row.get("NSE Code") or "").strip()
@@ -456,38 +726,66 @@ def _execute_rows(run_id: str, rows: list[dict[str, str]], refresh: bool) -> Non
                 "final_status": "",
                 "error": "NSE Code missing",
             }
-            run = load_run(run_id)
-            if run is None:
-                return
-            run["processed"] = int(run.get("processed", 0)) + 1
-            run["skipped_count"] = int(run.get("skipped_count", 0)) + 1
-            save_run(run_id, run)
-            append_result(run_id, result)
-            continue
-
-        symbol = f"{nse_code}.NS"
-        try:
-            result = module.check_sales_cagr(symbol, refresh=refresh)
-            result["name"] = name
-            result["industry_group"] = industry
-            result_status = str(result.get("final_status") or "").upper()
-            has_error = bool(result.get("error"))
-        except Exception as err:
-            result = {
-                "name": name,
-                "symbol": symbol,
-                "industry_group": industry,
-                "final_status": "",
-                "error": str(err),
-            }
-            result_status = ""
+            retries_used = 0
             has_error = True
+            result_status = ""
+            request_attempted = False
+        else:
+            symbol = f"{nse_code}.NS"
+            symbol_key = symbol.upper()
+            if symbol_key in seen_symbols:
+                result = {
+                    "name": name,
+                    "symbol": symbol,
+                    "industry_group": industry,
+                    "final_status": "",
+                    "error": "Duplicate symbol in CSV row skipped",
+                }
+                retries_used = 0
+                has_error = True
+                result_status = ""
+                request_attempted = False
+            else:
+                seen_symbols.add(symbol_key)
+                request_attempted = True
+                scraped, scrape_err, retries_used, stopped_while_retrying = _run_scrape_with_retry(
+                    module=module,
+                    run_id=run_id,
+                    symbol=symbol,
+                    refresh=refresh,
+                )
+
+                if stopped_while_retrying:
+                    _mark_run_stopped(run_id, "Stopped during retry cooldown")
+                    return
+
+                if scraped is not None:
+                    result = dict(scraped)
+                    result["name"] = name
+                    result["industry_group"] = industry
+                    result_status = str(result.get("final_status") or "").upper()
+                    has_error = bool(result.get("error"))
+                else:
+                    result = {
+                        "name": name,
+                        "symbol": symbol,
+                        "industry_group": industry,
+                        "final_status": "",
+                        "error": str(scrape_err or "Unknown scrape error"),
+                    }
+                    result_status = ""
+                    has_error = True
 
         run = load_run(run_id)
         if run is None:
             return
 
         run["processed"] = int(run.get("processed", 0)) + 1
+        run["retry_count"] = int(run.get("retry_count", 0)) + int(retries_used)
+        run["status"] = "running"
+        run["stage"] = "running"
+        run["cooldown_until"] = None
+        run["status_message"] = f"Processed {int(run.get('processed', 0))}/{total_rows} rows"
         if has_error:
             run["skipped_count"] = int(run.get("skipped_count", 0)) + 1
         elif result_status == "PASS":
@@ -498,9 +796,25 @@ def _execute_rows(run_id: str, rows: list[dict[str, str]], refresh: bool) -> Non
         save_run(run_id, run)
         append_result(run_id, result)
 
+        if request_attempted and index < total_rows - 1:
+            pacing_delay = _random_request_delay_seconds()
+            if pacing_delay > 0 and not _sleep_with_stop_check(run_id, pacing_delay):
+                _mark_run_stopped(run_id, "Stopped during pacing delay")
+                return
+
     run = load_run(run_id)
     if run and run.get("status") not in {"failed", "stopped"}:
-        run["status"] = "completed"
+        skipped_count = int(run.get("skipped_count", 0))
+        if skipped_count > 0:
+            run["status"] = "partial_completed"
+            run["stage"] = "partial_completed"
+            run["status_message"] = "Run completed with retryable errors"
+        else:
+            run["status"] = "completed"
+            run["stage"] = "completed"
+            run["status_message"] = "Run completed"
+        run["finished_at"] = now_iso()
+        run["cooldown_until"] = None
         save_run(run_id, run)
 
 
@@ -511,7 +825,7 @@ def generate_run_csv(run_id: str, username: str) -> Path | None:
     owner = str(run.get("username", ""))
     if owner != username:
         return None
-    if run.get("status") != "completed":
+    if run.get("status") not in {"completed", "partial_completed"}:
         return None
 
     rows = load_results(run_id)
@@ -591,11 +905,19 @@ def _resolve_export_fy_labels(rows: list[dict[str, Any]]) -> tuple[str | None, s
 
 def _to_run_summary(payload: dict) -> RunSummary:
     stopped_at_raw = payload.get("stopped_at")
+    started_at_raw = payload.get("started_at")
+    finished_at_raw = payload.get("finished_at")
+    cooldown_until_raw = payload.get("cooldown_until")
     return RunSummary(
         run_id=str(payload.get("run_id")),
         status=str(payload.get("status", "queued")),
+        stage=str(payload.get("stage", payload.get("status", "queued"))),
+        status_message=str(payload.get("status_message", "")),
         created_at=_parse_iso_datetime_utc(payload.get("created_at", now_iso())),
+        started_at=_parse_iso_datetime_utc(started_at_raw) if started_at_raw else None,
+        finished_at=_parse_iso_datetime_utc(finished_at_raw) if finished_at_raw else None,
         stopped_at=_parse_iso_datetime_utc(stopped_at_raw) if stopped_at_raw else None,
+        cooldown_until=_parse_iso_datetime_utc(cooldown_until_raw) if cooldown_until_raw else None,
         input_universe=str(payload.get("input_universe", "")),
         output_mode=str(payload.get("output_mode", "csv")),
         refresh=bool(payload.get("refresh", False)),
@@ -604,6 +926,7 @@ def _to_run_summary(payload: dict) -> RunSummary:
         pass_count=int(payload.get("pass_count", 0)),
         fail_count=int(payload.get("fail_count", 0)),
         skipped_count=int(payload.get("skipped_count", 0)),
+        retry_count=int(payload.get("retry_count", 0)),
     )
 
 
@@ -635,6 +958,7 @@ def _filter_runs(
         for run in next_runs
         if search_norm in run.run_id.lower()
         or search_norm in run.status.lower()
+        or search_norm in run.stage.lower()
         or search_norm in run.input_universe.lower()
         or search_norm in run.output_mode.lower()
         or search_norm in run.created_at.isoformat().lower()
@@ -646,9 +970,11 @@ def _sort_runs(runs: list[RunSummary], sort_by: str, sort_order: str) -> list[Ru
     key_map = {
         "created_at": lambda run: run.created_at,
         "status": lambda run: run.status.lower(),
+        "stage": lambda run: run.stage.lower(),
         "input_universe": lambda run: run.input_universe.lower(),
         "output_mode": lambda run: run.output_mode.lower(),
         "processed": lambda run: run.processed,
+        "retry_count": lambda run: run.retry_count,
         "pass_count": lambda run: run.pass_count,
         "fail_count": lambda run: run.fail_count,
         "skipped_count": lambda run: run.skipped_count,
@@ -1008,7 +1334,7 @@ def _parse_datetime_filter(raw_value: str, is_end: bool) -> datetime | None:
 def _find_active_run_payload(username: str) -> dict[str, Any] | None:
     for payload in list_runs_payloads(username=username):
         status = str(payload.get("status", "")).strip().lower()
-        if status in {"queued", "running"}:
+        if status in ACTIVE_RUN_STATUSES:
             return payload
     return None
 

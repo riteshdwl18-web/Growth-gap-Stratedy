@@ -155,7 +155,7 @@ onUnmounted(() => {
               <div class="left-nav-header">
                 <div v-if="!sidebarCollapsed">
                   <div class="left-nav-title">Screening Console</div>
-                  <div class="left-nav-subtitle">Runs, Results, and Export</div>
+                  <!-- <div class="left-nav-subtitle">Runs, Results, and Export</div> -->
                 </div>
                 <v-tooltip :text="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'" location="right">
                   <template #activator="{ props }">

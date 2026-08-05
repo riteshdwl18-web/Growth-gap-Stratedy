@@ -10,8 +10,10 @@ const router = useRouter()
 const runHeaders = [
   { title: 'Run ID', key: 'run_id' },
   { title: 'Status', key: 'status' },
+  { title: 'Stage', key: 'stage' },
   { title: 'Universe', key: 'input_universe' },
   { title: 'Processed', key: 'processed' },
+  { title: 'Retries', key: 'retry_count' },
   { title: 'PASS', key: 'pass_count' },
   { title: 'FAIL', key: 'fail_count' },
   { title: 'Skipped', key: 'skipped_count' },
@@ -23,8 +25,11 @@ const runHeaders = [
 const runStatusOptions = [
   { title: 'All Statuses', value: 'all' },
   { title: 'Queued', value: 'queued' },
+  { title: 'Preparing', value: 'preparing' },
   { title: 'Running', value: 'running' },
+  { title: 'Cooling Down', value: 'cooling_down' },
   { title: 'Completed', value: 'completed' },
+  { title: 'Partial Completed', value: 'partial_completed' },
   { title: 'Failed', value: 'failed' },
   { title: 'Stopped', value: 'stopped' },
 ]
@@ -32,15 +37,20 @@ const runStatusOptions = [
 const runSortOptions = [
   { title: 'Created Time', value: 'created_at' },
   { title: 'Status', value: 'status' },
+  { title: 'Stage', value: 'stage' },
   { title: 'Universe', value: 'input_universe' },
   { title: 'Processed', value: 'processed' },
+  { title: 'Retry Count', value: 'retry_count' },
   { title: 'PASS Count', value: 'pass_count' },
   { title: 'FAIL Count', value: 'fail_count' },
   { title: 'Skipped Count', value: 'skipped_count' },
 ]
 
-const activeRuns = computed(() => controller.runs.filter((run) => run.status === 'queued' || run.status === 'running').length)
-const completedRuns = computed(() => controller.runs.filter((run) => run.status === 'completed').length)
+const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'running', 'cooling_down'])
+const activeRuns = computed(() => controller.runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length)
+const completedRuns = computed(
+  () => controller.runs.filter((run) => run.status === 'completed' || run.status === 'partial_completed').length,
+)
 const failedRuns = computed(() => controller.runs.filter((run) => run.status === 'failed').length)
 
 const actionConfirmOpen = ref(false)
@@ -136,6 +146,15 @@ function downloadRunCsv(runId: string): void {
 function openRunDetails(runId: string): void {
   controller.setSelectedRun(runId)
   void router.push(`/runs/${runId}`)
+}
+
+function openRunDetailsForRetry(runId: string): void {
+  controller.setSelectedRun(runId)
+  void router.push({ path: `/runs/${runId}`, query: { retry: '1' } })
+}
+
+function retryableCount(run: { skipped_count?: number }): number {
+  return Number(run.skipped_count || 0)
 }
 </script>
 
@@ -243,22 +262,45 @@ function openRunDetails(runId: string): void {
             </template>
 
             <template #item.status="{ item }">
-              <v-chip
-                size="small"
-                :color="
-                  item.status === 'completed'
-                    ? 'success'
-                    : item.status === 'failed'
-                      ? 'error'
-                      : item.status === 'stopped'
-                        ? 'warning'
-                        : 'info'
-                "
-                variant="tonal"
-              >
-                {{ item.status }}
-              </v-chip>
+              <div class="d-flex align-center ga-1 flex-wrap">
+                <v-chip
+                  size="small"
+                  :color="
+                    item.status === 'completed' || item.status === 'partial_completed'
+                      ? 'success'
+                      : item.status === 'failed'
+                        ? 'error'
+                        : item.status === 'stopped'
+                          ? 'warning'
+                          : 'info'
+                  "
+                  variant="tonal"
+                >
+                  {{ item.status }}
+                </v-chip>
+                <v-chip
+                  v-if="retryableCount(item) > 0"
+                  size="x-small"
+                  color="secondary"
+                  variant="outlined"
+                  style="cursor: pointer"
+                  @click="openRunDetailsForRetry(item.run_id)"
+                >
+                  Retry {{ retryableCount(item) }}
+                </v-chip>
+                <v-chip
+                  v-if="Number(item.retry_count || 0) > 0"
+                  size="x-small"
+                  color="primary"
+                  variant="outlined"
+                >
+                  Retries {{ item.retry_count }}
+                </v-chip>
+              </div>
             </template>
+
+            <template #item.stage="{ item }">{{ item.stage || item.status || '-' }}</template>
+            <template #item.retry_count="{ item }">{{ item.retry_count || 0 }}</template>
 
             <template #item.processed="{ item }">{{ item.processed }} / {{ item.total }}</template>
             <template #item.created_at="{ item }">{{ formatLocalDateTime(item.created_at) }}</template>
@@ -287,7 +329,7 @@ function openRunDetails(runId: string): void {
                       size="small"
                       variant="tonal"
                       color="secondary"
-                      :disabled="item.status !== 'completed'"
+                      :disabled="item.status !== 'completed' && item.status !== 'partial_completed'"
                       @click="downloadRunCsv(item.run_id)"
                     />
                   </template>
@@ -301,7 +343,7 @@ function openRunDetails(runId: string): void {
                       size="small"
                       color="error"
                       variant="tonal"
-                      :disabled="item.status !== 'queued' && item.status !== 'running'"
+                      :disabled="!ACTIVE_RUN_STATUSES.has(item.status)"
                       @click="confirmAndStop(item.run_id)"
                     />
                   </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useRunsController } from '../composables/useRunsController'
@@ -11,6 +11,7 @@ const router = useRouter()
 const detailDrawerOpen = ref(false)
 const selectedResult = ref<Record<string, unknown> | null>(null)
 const downloadConfirmOpen = ref(false)
+const retryFailedConfirmOpen = ref(false)
 const filterDialogOpen = ref(false)
 const copyToastOpen = ref(false)
 const copyToastMessage = ref('')
@@ -28,6 +29,10 @@ const favoriteRenameReplaceQuery = ref(false)
 const favoriteRenameBusy = ref(false)
 const favoriteRenameError = ref('')
 const deleteFavoriteConfirmOpen = ref(false)
+const retryFailedBusy = ref(false)
+const runActionError = ref('')
+const cooldownNowMs = ref(Date.now())
+let cooldownTickerHandle: number | undefined
 const ALL_LIST_OPTION_VALUE = '__all_list__'
 const INDUSTRY_ALL_VALUE = '__all__'
 const filterDraft = reactive({
@@ -46,6 +51,7 @@ const filterDraft = reactive({
 const MIN_TOTAL_GROWTH = 32.25
 const MIN_TTM_GROWTH = 5
 const MIN_COMBINED_GROWTH = MIN_TOTAL_GROWTH + MIN_TTM_GROWTH
+const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'running', 'cooling_down'])
 
 const resultHeaders = [
   { title: 'Name', key: 'name' },
@@ -99,6 +105,7 @@ async function applyRouteRunId(): Promise<void> {
   }
   controller.setSelectedRun(runId, { fetch: false })
   await controller.preloadResultsWithFavorite(runId)
+  maybeOpenRetryFromRouteQuery()
 }
 
 function openFavoriteDialog(): void {
@@ -517,6 +524,64 @@ function refreshLivePrices(): void {
   void controller.fetchRunResults(controller.selectedRunId, false, true)
 }
 
+function formatLocalDateTime(rawValue: string | null | undefined): string {
+  const value = String(rawValue ?? '').trim()
+  if (!value) {
+    return ''
+  }
+  const hasTimeZone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(value)
+  const normalized = hasTimeZone ? value : `${value}Z`
+  const parsed = new Date(normalized)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return parsed.toLocaleString()
+}
+
+async function retryFailedRowsForCurrentRun(): Promise<void> {
+  const sourceRunId = String(controller.selectedRunId || '').trim()
+  if (!sourceRunId) {
+    return
+  }
+
+  runActionError.value = ''
+  retryFailedBusy.value = true
+  try {
+    const created = await controller.retryFailedRows(sourceRunId)
+    await router.push(`/runs/${created.run_id}`)
+  } catch (err) {
+    runActionError.value = err instanceof Error ? err.message : 'Failed to start retry run'
+  } finally {
+    retryFailedBusy.value = false
+  }
+}
+
+function requestRetryFailedRows(): void {
+  if (!canRetryFailedRows.value || retryFailedBusy.value) {
+    return
+  }
+  retryFailedConfirmOpen.value = true
+}
+
+function maybeOpenRetryFromRouteQuery(): void {
+  const retryQuery = String(route.query.retry ?? '').trim()
+  if (retryQuery !== '1') {
+    return
+  }
+  if (!canRetryFailedRows.value || retryFailedBusy.value) {
+    return
+  }
+  requestRetryFailedRows()
+  const nextQuery = { ...route.query }
+  delete nextQuery.retry
+  void router.replace({ path: route.path, query: nextQuery })
+}
+
+function confirmRetryFailedRows(): void {
+  retryFailedConfirmOpen.value = false
+  void retryFailedRowsForCurrentRun()
+}
+
 const selectedResultTitle = computed(() => {
   if (!selectedResult.value) {
     return 'Result Details'
@@ -573,6 +638,78 @@ const livePriceStatusText = computed(() => {
     return `Live refresh requested: ${liveRefreshRequestedAt.value}`
   }
   return 'Live not refreshed yet'
+})
+
+const selectedRunStatusColor = computed<'info' | 'success' | 'warning' | 'error'>(() => {
+  const status = String(controller.selectedRun?.status || '').toLowerCase()
+  if (status === 'completed') {
+    return 'success'
+  }
+  if (status === 'partial_completed') {
+    return 'warning'
+  }
+  if (status === 'failed') {
+    return 'error'
+  }
+  if (status === 'stopped') {
+    return 'warning'
+  }
+  return 'info'
+})
+
+const selectedRunIsActive = computed(() => ACTIVE_RUN_STATUSES.has(String(controller.selectedRun?.status || '')))
+
+const selectedRunStatusMessage = computed(() => {
+  const message = String(controller.selectedRun?.status_message || '').trim()
+  if (message) {
+    return message
+  }
+  const stage = String(controller.selectedRun?.stage || controller.selectedRun?.status || '').trim()
+  return stage ? `Stage: ${stage}` : 'No run status available'
+})
+
+const selectedRunCooldownText = computed(() => {
+  const cooldownUntil = String(controller.selectedRun?.cooldown_until || '').trim()
+  if (!cooldownUntil) {
+    return ''
+  }
+  return formatLocalDateTime(cooldownUntil)
+})
+
+const selectedRunCooldownRemainingText = computed(() => {
+  const cooldownUntil = String(controller.selectedRun?.cooldown_until || '').trim()
+  if (!cooldownUntil) {
+    return ''
+  }
+
+  const parsed = Date.parse(cooldownUntil)
+  if (!Number.isFinite(parsed)) {
+    return ''
+  }
+
+  const remainingMs = Math.max(0, parsed - cooldownNowMs.value)
+  if (remainingMs <= 0) {
+    return '0s'
+  }
+
+  const seconds = Math.ceil(remainingMs / 1000)
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60)
+    const leftoverSeconds = seconds % 60
+    return `${minutes}m ${leftoverSeconds}s`
+  }
+  return `${seconds}s`
+})
+
+const canRetryFailedRows = computed(() => {
+  const run = controller.selectedRun
+  if (!run) {
+    return false
+  }
+  if (selectedRunIsActive.value) {
+    return false
+  }
+  return Number(run.skipped_count || 0) > 0
 })
 
 const activeAdvancedFilters = computed(() => {
@@ -656,13 +793,31 @@ function goToNextResultsPage(): void {
 }
 
 onMounted(() => {
+  cooldownTickerHandle = window.setInterval(() => {
+    cooldownNowMs.value = Date.now()
+  }, 1000)
   void applyRouteRunId()
+})
+
+onBeforeUnmount(() => {
+  if (cooldownTickerHandle) {
+    window.clearInterval(cooldownTickerHandle)
+    cooldownTickerHandle = undefined
+  }
 })
 
 watch(
   () => route.params.runId,
   () => {
+    runActionError.value = ''
     void applyRouteRunId()
+  },
+)
+
+watch(
+  () => route.query.retry,
+  () => {
+    maybeOpenRetryFromRouteQuery()
   },
 )
 </script>
@@ -718,6 +873,62 @@ watch(
             <v-alert v-if="!controller.selectedRunId" type="info" variant="tonal" class="mb-3">
               Select a run from Runs page to view symbol-level results and export filtered CSV.
             </v-alert>
+
+            <v-alert
+              v-if="runActionError"
+              type="error"
+              variant="tonal"
+              density="comfortable"
+              class="mb-3"
+              closable
+              @click:close="runActionError = ''"
+            >
+              {{ runActionError }}
+            </v-alert>
+
+            <v-sheet v-if="controller.selectedRun" class="run-progress-strip mb-3" rounded="lg">
+              <div class="run-progress-strip-header">
+                <div class="d-flex align-center ga-2 flex-wrap">
+                  <v-chip size="small" :color="selectedRunStatusColor" variant="tonal">
+                    {{ controller.selectedRun.status }}
+                  </v-chip>
+                  <v-chip size="small" variant="tonal" color="primary">
+                    {{ controller.selectedRun.stage || controller.selectedRun.status }}
+                  </v-chip>
+                  <v-chip size="small" variant="tonal" color="secondary">
+                    Retries {{ controller.selectedRun.retry_count || 0 }}
+                  </v-chip>
+                  <v-chip v-if="selectedRunCooldownText" size="small" variant="outlined" color="warning">
+                    Cooldown {{ selectedRunCooldownRemainingText }} (until {{ selectedRunCooldownText }})
+                  </v-chip>
+                </div>
+                <div class="d-flex align-center ga-2 flex-wrap">
+                  <v-btn
+                    variant="tonal"
+                    color="secondary"
+                    prepend-icon="mdi-restart"
+                    :loading="retryFailedBusy"
+                    :disabled="!canRetryFailedRows"
+                    @click="requestRetryFailedRows"
+                  >
+                    Retry Failed Rows
+                  </v-btn>
+                </div>
+              </div>
+              <div class="text-body-2 text-medium-emphasis mt-1">{{ selectedRunStatusMessage }}</div>
+              <div class="run-progress-strip-metrics">
+                <span>{{ controller.selectedRun.processed }} / {{ controller.selectedRun.total }} processed</span>
+                <span>PASS {{ controller.selectedRun.pass_count }}</span>
+                <span>FAIL {{ controller.selectedRun.fail_count }}</span>
+                <span>Skipped {{ controller.selectedRun.skipped_count }}</span>
+              </div>
+              <v-progress-linear
+                :model-value="controller.progressPct"
+                :color="selectedRunIsActive ? 'primary' : selectedRunStatusColor"
+                height="10"
+                rounded
+              />
+            </v-sheet>
 
             <v-row v-if="controller.selectedRunId" class="mb-2">
               <v-col cols="12" class="d-flex ga-2 align-center flex-wrap">
@@ -791,7 +1002,7 @@ watch(
             </v-row>
 
             <v-row v-if="controller.selectedRunId" class="mb-2">
-              <v-col cols="12" md="4">
+              <v-col cols="12" lg="4">
                 <v-text-field
                   v-model="controller.resultsQuery.search"
                   label="Search results"
@@ -804,7 +1015,7 @@ watch(
                   @keyup.enter="controller.applyResultsFilters"
                 />
               </v-col>
-              <v-col cols="12" sm="6" md="2">
+              <v-col cols="12" sm="6" lg="2">
                 <v-select
                   v-model="controller.resultsQuery.final_status"
                   :items="resultStatusOptions"
@@ -814,7 +1025,7 @@ watch(
                   @update:model-value="controller.applyResultsFilters"
                 />
               </v-col>
-              <v-col cols="12" sm="6" md="3">
+              <v-col cols="12" sm="6" lg="3">
                 <v-select
                   v-model="controller.resultsQuery.sort_by"
                   :items="resultSortOptions"
@@ -824,29 +1035,33 @@ watch(
                   @update:model-value="controller.applyResultsFilters"
                 />
               </v-col>
-              <v-col cols="12" sm="6" md="3" class="d-flex ga-2 align-center flex-wrap">
-                <v-btn variant="flat" @click="controller.applyResultsFilters">Search</v-btn>
-                <v-btn variant="tonal" color="primary" prepend-icon="mdi-filter-variant" @click="openFilterDialog">
-                  Filter
-                </v-btn>
-                <v-btn
-                  variant="tonal"
-                  color="secondary"
-                  prepend-icon="mdi-refresh"
-                  :loading="controller.loadingResults"
-                  @click="refreshLivePrices"
-                >
-                  Refresh Live
-                </v-btn>
-                <v-chip
-                  v-if="controller.selectedRunId"
-                  size="small"
-                  variant="outlined"
-                  color="secondary"
-                >
-                  {{ livePriceStatusText }}
-                </v-chip>
-                <v-btn variant="text" color="secondary" @click="resetResultsFilters">Reset</v-btn>
+              <v-col cols="12" lg="auto" class="results-actions-col">
+                <div class="results-actions-toolbar">
+                  <div class="results-actions-buttons">
+                    <v-btn variant="flat" @click="controller.applyResultsFilters">Search</v-btn>
+                    <v-btn variant="tonal" color="primary" prepend-icon="mdi-filter-variant" @click="openFilterDialog">
+                      Filter
+                    </v-btn>
+                    <v-btn
+                      variant="tonal"
+                      color="secondary"
+                      prepend-icon="mdi-refresh"
+                      :loading="controller.loadingResults"
+                      @click="refreshLivePrices"
+                    >
+                      Refresh Live
+                    </v-btn>
+                  </div>
+                  <v-chip
+                    v-if="controller.selectedRunId"
+                    size="small"
+                    variant="outlined"
+                    color="secondary"
+                    class="results-live-chip"
+                  >
+                    {{ livePriceStatusText }}
+                  </v-chip>
+                </div>
               </v-col>
             </v-row>
 
@@ -1300,6 +1515,34 @@ watch(
         </v-card>
       </v-dialog>
 
+      <v-dialog v-model="retryFailedConfirmOpen" max-width="500">
+        <v-card>
+          <v-card-title>Retry Failed Rows</v-card-title>
+          <v-card-text>
+            This will create a new run containing only retryable error rows from the current run.
+            Continue?
+          </v-card-text>
+          <v-card-actions class="justify-end">
+            <v-btn
+              variant="text"
+              color="secondary"
+              :disabled="retryFailedBusy"
+              @click="retryFailedConfirmOpen = false"
+            >
+              Cancel
+            </v-btn>
+            <v-btn
+              variant="flat"
+              color="primary"
+              :loading="retryFailedBusy"
+              @click="confirmRetryFailedRows"
+            >
+              Yes, Start Retry Run
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
       <v-snackbar
         v-model="copyToastOpen"
         timeout="1500"
@@ -1338,6 +1581,61 @@ watch(
   flex-direction: column;
 }
 
+.run-progress-strip {
+  padding: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.82) 100%);
+}
+
+.run-progress-strip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.run-progress-strip-metrics {
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+  color: rgba(15, 23, 42, 0.78);
+}
+
+.results-actions-col :deep(.v-btn) {
+  min-height: 36px;
+}
+
+.results-actions-col :deep(.v-chip) {
+  min-height: 32px;
+}
+
+.results-actions-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 56px;
+}
+
+.results-actions-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (min-width: 1280px) {
+  .results-actions-toolbar,
+  .results-actions-buttons {
+    flex-wrap: nowrap;
+  }
+}
+
 @media (max-width: 960px) {
   .details-card {
     min-height: auto;
@@ -1349,6 +1647,11 @@ watch(
 
   .results-footer-bar {
     margin-top: 12px;
+  }
+
+  .results-actions-toolbar,
+  .results-actions-buttons {
+    justify-content: flex-start;
   }
 }
 </style>

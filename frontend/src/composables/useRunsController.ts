@@ -3,8 +3,13 @@ import { computed, ref } from 'vue'
 export type RunSummary = {
   run_id: string
   status: string
+  stage?: string
+  status_message?: string
   created_at: string
+  started_at?: string | null
+  finished_at?: string | null
   stopped_at: string | null
+  cooldown_until?: string | null
   input_universe: string
   output_mode: string
   refresh: boolean
@@ -13,7 +18,10 @@ export type RunSummary = {
   pass_count: number
   fail_count: number
   skipped_count: number
+  retry_count?: number
 }
+
+const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'running', 'cooling_down'])
 
 export type UploadValidationResponse = {
   upload_id: string | null
@@ -215,8 +223,11 @@ const progressPct = computed(() => {
   }
   return Math.min(100, Math.round((run.processed / run.total) * 100))
 })
-const canDownloadCsv = computed(() => selectedRun.value?.status === 'completed')
-const activeRun = computed(() => runs.value.find((run) => run.status === 'queued' || run.status === 'running') ?? null)
+const canDownloadCsv = computed(() => {
+  const status = String(selectedRun.value?.status || '')
+  return status === 'completed' || status === 'partial_completed'
+})
+const activeRun = computed(() => runs.value.find((run) => ACTIVE_RUN_STATUSES.has(run.status)) ?? null)
 const hasActiveRun = computed(() => !!activeRun.value)
 
 let pollHandle: number | undefined
@@ -585,6 +596,22 @@ async function stopRun(runId: string): Promise<void> {
   }
 }
 
+async function retryFailedRows(runId: string): Promise<RunSummary> {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/retry-failed`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    await _throwApiError(response, 'Failed to start retry run')
+  }
+
+  const created = (await response.json()) as RunSummary
+  selectedRunId.value = created.run_id
+  selectedRunCache.value = created
+  await fetchRuns(true)
+  await fetchRunResults(created.run_id, true)
+  return created
+}
+
 function setSelectedRun(runId: string, options?: { fetch?: boolean }): void {
   selectedRunId.value = runId
   resultsQuery.value.page = 1
@@ -815,7 +842,7 @@ function startPolling(): void {
     return
   }
   pollHandle = window.setInterval(async () => {
-    const activeExists = runs.value.some((run) => run.status === 'queued' || run.status === 'running')
+    const activeExists = runs.value.some((run) => ACTIVE_RUN_STATUSES.has(run.status))
     if (!activeExists) {
       return
     }
@@ -908,6 +935,7 @@ export function useRunsController() {
     startRunFromUpload,
     startValidatedWorkflowRun,
     stopRun,
+    retryFailedRows,
     setSelectedRun,
     downloadSelectedRunCsv,
     downloadFilteredRunsCsv,

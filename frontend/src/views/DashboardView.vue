@@ -45,13 +45,16 @@ const canExecuteWorkflow = computed(() => !!controller.uploadResult?.valid && !!
 
 const isSelectedRunActive = computed(() => {
   const status = controller.selectedRun?.status
-  return status === 'queued' || status === 'running'
+  return status === 'queued' || status === 'preparing' || status === 'running' || status === 'cooling_down'
 })
 
 const selectedRunStatusTitle = computed(() => {
   const status = controller.selectedRun?.status
   if (status === 'completed') {
     return 'Run Completed'
+  }
+  if (status === 'partial_completed') {
+    return 'Run Partially Completed'
   }
   if (status === 'failed') {
     return 'Run Failed'
@@ -180,6 +183,8 @@ onMounted(() => {
                   :color="
                     controller.selectedRun?.status === 'completed'
                       ? 'success'
+                      : controller.selectedRun?.status === 'partial_completed'
+                        ? 'warning'
                       : controller.selectedRun?.status === 'failed'
                         ? 'error'
                         : controller.selectedRun?.status === 'stopped'
