@@ -27,7 +27,7 @@ backend/.env
 
 # Logs
 *.log
-
+.aws-key.pem
 # Runtime artifacts
 backend/runtime/app.db
 backend/runtime/*.db

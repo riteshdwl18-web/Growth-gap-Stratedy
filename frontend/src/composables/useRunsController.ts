@@ -71,6 +71,10 @@ type ResultsQuery = {
   market_cap_min: string
   market_cap_max: string
   industry_group: string
+  total_2y_growth_min: string
+  total_2y_growth_max: string
+  ttm_vs_end_fy_min: string
+  ttm_vs_end_fy_max: string
   combined_growth_min: string
   combined_growth_max: string
   roce_min: string
@@ -89,6 +93,10 @@ export type FavoriteResultsFilterQuery = {
   market_cap_min: string
   market_cap_max: string
   industry_group: string
+  total_2y_growth_min: string
+  total_2y_growth_max: string
+  ttm_vs_end_fy_min: string
+  ttm_vs_end_fy_max: string
   combined_growth_min: string
   combined_growth_max: string
   roce_min: string
@@ -116,7 +124,7 @@ type FavoriteResultsFilterListResponse = {
 
 const API_BASE_URL =
   normalizeLoopbackApiBase(
-    import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:8000`,
+    import.meta.env.VITE_API_BASE_URL ?? window.location.origin,
   )
 
 function normalizeLoopbackApiBase(rawBase: string): string {
@@ -183,6 +191,10 @@ const resultsQuery = ref<ResultsQuery>({
   market_cap_min: '',
   market_cap_max: '',
   industry_group: '',
+  total_2y_growth_min: '',
+  total_2y_growth_max: '',
+  ttm_vs_end_fy_min: '',
+  ttm_vs_end_fy_max: '',
   combined_growth_min: '',
   combined_growth_max: '',
   roce_min: '',
@@ -266,6 +278,10 @@ function _toFavoriteResultsFilterQuery(): FavoriteResultsFilterQuery {
     market_cap_min: resultsQuery.value.market_cap_min,
     market_cap_max: resultsQuery.value.market_cap_max,
     industry_group: resultsQuery.value.industry_group,
+    total_2y_growth_min: resultsQuery.value.total_2y_growth_min,
+    total_2y_growth_max: resultsQuery.value.total_2y_growth_max,
+    ttm_vs_end_fy_min: resultsQuery.value.ttm_vs_end_fy_min,
+    ttm_vs_end_fy_max: resultsQuery.value.ttm_vs_end_fy_max,
     combined_growth_min: resultsQuery.value.combined_growth_min,
     combined_growth_max: resultsQuery.value.combined_growth_max,
     roce_min: resultsQuery.value.roce_min,
@@ -284,6 +300,10 @@ function _applyFavoriteResultsFilterQuery(query: FavoriteResultsFilterQuery): vo
   resultsQuery.value.market_cap_min = String(query.market_cap_min ?? '').trim()
   resultsQuery.value.market_cap_max = String(query.market_cap_max ?? '').trim()
   resultsQuery.value.industry_group = String(query.industry_group ?? '').trim()
+  resultsQuery.value.total_2y_growth_min = String(query.total_2y_growth_min ?? '').trim()
+  resultsQuery.value.total_2y_growth_max = String(query.total_2y_growth_max ?? '').trim()
+  resultsQuery.value.ttm_vs_end_fy_min = String(query.ttm_vs_end_fy_min ?? '').trim()
+  resultsQuery.value.ttm_vs_end_fy_max = String(query.ttm_vs_end_fy_max ?? '').trim()
   resultsQuery.value.combined_growth_min = String(query.combined_growth_min ?? '').trim()
   resultsQuery.value.combined_growth_max = String(query.combined_growth_max ?? '').trim()
   resultsQuery.value.roce_min = String(query.roce_min ?? '').trim()
@@ -372,6 +392,10 @@ async function fetchRunResults(runId: string, resetPage = false, livePriceOverri
         market_cap_min: resultsQuery.value.market_cap_min,
         market_cap_max: resultsQuery.value.market_cap_max,
         industry_group: resultsQuery.value.industry_group,
+        total_2y_growth_min: resultsQuery.value.total_2y_growth_min,
+        total_2y_growth_max: resultsQuery.value.total_2y_growth_max,
+        ttm_vs_end_fy_min: resultsQuery.value.ttm_vs_end_fy_min,
+        ttm_vs_end_fy_max: resultsQuery.value.ttm_vs_end_fy_max,
         combined_growth_min: resultsQuery.value.combined_growth_min,
         combined_growth_max: resultsQuery.value.combined_growth_max,
         roce_min: resultsQuery.value.roce_min,
@@ -825,6 +849,10 @@ function downloadFilteredResultsCsv(): void {
     market_cap_min: resultsQuery.value.market_cap_min,
     market_cap_max: resultsQuery.value.market_cap_max,
     industry_group: resultsQuery.value.industry_group,
+    total_2y_growth_min: resultsQuery.value.total_2y_growth_min,
+    total_2y_growth_max: resultsQuery.value.total_2y_growth_max,
+    ttm_vs_end_fy_min: resultsQuery.value.ttm_vs_end_fy_min,
+    ttm_vs_end_fy_max: resultsQuery.value.ttm_vs_end_fy_max,
     combined_growth_min: resultsQuery.value.combined_growth_min,
     combined_growth_max: resultsQuery.value.combined_growth_max,
     roce_min: resultsQuery.value.roce_min,

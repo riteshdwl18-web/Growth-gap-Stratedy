@@ -50,13 +50,6 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const authStatus = await getAuthStatus()
 
-  if (authStatus.signup_required && to.path !== '/signup') {
-    return {
-      path: '/signup',
-      query: { redirect: to.fullPath },
-    }
-  }
-
   if (to.meta.requiresAuth && !authStatus.authenticated) {
     return {
       path: '/login',

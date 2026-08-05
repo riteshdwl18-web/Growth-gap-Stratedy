@@ -64,9 +64,16 @@ _load_local_env()
 class Settings(BaseModel):
     app_name: str = os.getenv("APP_NAME", "Growth Gap Strategy API")
     app_version: str = os.getenv("APP_VERSION", "0.1.0")
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://postgres:postgres@127.0.0.1:5432/growth_gap_strategy",
+    )
     auth_username: str = os.getenv("AUTH_USERNAME", "admin")
     auth_password: str = os.getenv("AUTH_PASSWORD", "admin123")
     session_ttl_minutes: int = _env_int("SESSION_TTL_MINUTES", 480)
+    session_cookie_secure: bool = _env_bool("SESSION_COOKIE_SECURE", False)
+    session_cookie_samesite: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
+    session_cookie_domain: str = os.getenv("SESSION_COOKIE_DOMAIN", "").strip()
     google_oauth_enabled: bool = _env_bool("GOOGLE_OAUTH_ENABLED", False)
     google_client_id: str = os.getenv("GOOGLE_CLIENT_ID", "")
     google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")

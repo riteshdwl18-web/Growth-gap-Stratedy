@@ -8,270 +8,134 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from peewee import (
+    AutoField,
+    BooleanField,
+    CharField,
+    FloatField,
+    ForeignKeyField,
+    IntegrityError,
+    Model,
+    Proxy,
+    TextField,
+)
+from playhouse.db_url import connect
+
+from app.config import settings
+
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtime"
 RUNS_DIR = RUNTIME_DIR / "runs"
 RESULTS_DIR = RUNTIME_DIR / "results"
 UPLOADS_DIR = RUNTIME_DIR / "uploads"
 EXPORTS_DIR = RUNTIME_DIR / "exports"
-DB_PATH = RUNTIME_DIR / "app.db"
+LEGACY_SQLITE_PATH = RUNTIME_DIR / "app.db"
 
 
 for directory in (RUNS_DIR, RESULTS_DIR, UPLOADS_DIR, EXPORTS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 
-_db_init_lock = threading.Lock()
+_db_lock = threading.Lock()
 _db_initialized = False
+_db_proxy = Proxy()
+_database = None
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+class BaseOrmModel(Model):
+    class Meta:
+        database = _db_proxy
 
 
-def _table_has_column(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return any(str(row["name"]) == column_name for row in rows)
+class AppMetaRecord(BaseOrmModel):
+    key = CharField(primary_key=True, max_length=120)
+    value = TextField()
+
+    class Meta:
+        table_name = "app_meta"
 
 
-def _init_db() -> None:
-    global _db_initialized
-    if _db_initialized:
-        return
+class RunRecord(BaseOrmModel):
+    run_id = CharField(primary_key=True, max_length=64)
+    username = CharField(default="", index=True)
+    status = CharField(max_length=40)
+    created_at = CharField(max_length=64)
+    payload_json = TextField()
 
-    with _db_init_lock:
-        if _db_initialized:
-            return
-
-        with _connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS runs (
-                    run_id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL,
-                    row_json TEXT NOT NULL,
-                    FOREIGN KEY(run_id) REFERENCES runs(run_id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_results_run_id
-                ON results(run_id, id)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS uploads (
-                    upload_id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    valid INTEGER NOT NULL,
-                    payload_json TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS app_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    username TEXT PRIMARY KEY,
-                    password_hash TEXT NOT NULL,
-                    salt TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sessions (
-                    token TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
-                ON sessions(expires_at)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS live_price_cache (
-                    symbol TEXT PRIMARY KEY,
-                    price REAL NOT NULL,
-                    quote_as_of TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    source TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_live_price_cache_expires_at
-                ON live_price_cache(expires_at)
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_result_filters (
-                    filter_id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    query_json TEXT NOT NULL,
-                    is_default INTEGER NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_user_result_filters_user_name
-                ON user_result_filters(username, name)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_user_result_filters_user_default
-                ON user_result_filters(username, is_default)
-                """
-            )
-
-            if not _table_has_column(conn, "runs", "username"):
-                conn.execute("ALTER TABLE runs ADD COLUMN username TEXT NOT NULL DEFAULT ''")
-            if not _table_has_column(conn, "uploads", "username"):
-                conn.execute("ALTER TABLE uploads ADD COLUMN username TEXT NOT NULL DEFAULT ''")
-
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_runs_username_created_at
-                ON runs(username, created_at)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_uploads_username_created_at
-                ON uploads(username, created_at)
-                """
-            )
-            conn.commit()
-
-        _bootstrap_from_json_files_once()
-        _db_initialized = True
+    class Meta:
+        table_name = "runs"
+        indexes = ((("username", "created_at"), False),)
 
 
-def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
-    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
-    if row is None:
-        return None
-    return str(row["value"])
+class ResultRecord(BaseOrmModel):
+    id = AutoField()
+    run = ForeignKeyField(RunRecord, backref="result_rows", column_name="run_id", on_delete="CASCADE")
+    row_json = TextField()
+
+    class Meta:
+        table_name = "results"
+        indexes = ((("run", "id"), False),)
 
 
-def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO app_meta(key, value) VALUES(?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """,
-        (key, value),
-    )
+class UploadRecord(BaseOrmModel):
+    upload_id = CharField(primary_key=True, max_length=64)
+    username = CharField(default="", index=True)
+    created_at = CharField(max_length=64)
+    valid = BooleanField(default=False)
+    payload_json = TextField()
+
+    class Meta:
+        table_name = "uploads"
+        indexes = ((("username", "created_at"), False),)
 
 
-def _bootstrap_from_json_files_once() -> None:
-    with _connect() as conn:
-        if _meta_get(conn, "migrated_from_json") == "1":
-            return
+class UserRecord(BaseOrmModel):
+    username = CharField(primary_key=True, max_length=120)
+    password_hash = TextField()
+    salt = TextField()
+    created_at = CharField(max_length=64)
 
-        # Migrate runs
-        for path in RUNS_DIR.glob("*.json"):
-            payload = _read_json(path, None)
-            if not isinstance(payload, dict):
-                continue
-            run_id = str(payload.get("run_id") or path.stem)
-            status = str(payload.get("status", "queued"))
-            created_at = str(payload.get("created_at", now_iso()))
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO runs(run_id, username, status, created_at, payload_json)
-                VALUES(?, ?, ?, ?, ?)
-                """,
-                (run_id, str(payload.get("username", "")), status, created_at, json.dumps(payload, ensure_ascii=True)),
-            )
-
-        # Migrate results
-        for path in RESULTS_DIR.glob("*.json"):
-            run_id = path.stem
-            rows = _read_json(path, [])
-            if not isinstance(rows, list):
-                continue
-            conn.execute("DELETE FROM results WHERE run_id = ?", (run_id,))
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                conn.execute(
-                    "INSERT INTO results(run_id, row_json) VALUES(?, ?)",
-                    (run_id, json.dumps(row, ensure_ascii=True)),
-                )
-
-        # Migrate uploads
-        for path in UPLOADS_DIR.glob("*.json"):
-            payload = _read_json(path, None)
-            if not isinstance(payload, dict):
-                continue
-            upload_id = str(payload.get("upload_id") or path.stem)
-            created_at = str(payload.get("created_at", now_iso()))
-            valid = 1 if bool(payload.get("valid", False)) else 0
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO uploads(upload_id, username, created_at, valid, payload_json)
-                VALUES(?, ?, ?, ?, ?)
-                """,
-                (
-                    upload_id,
-                    str(payload.get("username", "")),
-                    created_at,
-                    valid,
-                    json.dumps(payload, ensure_ascii=True),
-                ),
-            )
-
-        _meta_set(conn, "migrated_from_json", "1")
-        conn.commit()
+    class Meta:
+        table_name = "users"
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as file_obj:
-        json.dump(payload, file_obj, ensure_ascii=True, indent=2)
-    tmp_path.replace(path)
+class SessionRecord(BaseOrmModel):
+    token = CharField(primary_key=True, max_length=64)
+    username = CharField(index=True)
+    expires_at = CharField(max_length=64, index=True)
+    created_at = CharField(max_length=64)
+
+    class Meta:
+        table_name = "sessions"
+
+
+class LivePriceCacheRecord(BaseOrmModel):
+    symbol = CharField(primary_key=True, max_length=40)
+    price = FloatField()
+    quote_as_of = CharField(max_length=64)
+    expires_at = CharField(max_length=64, index=True)
+    updated_at = CharField(max_length=64)
+    source = CharField(max_length=80)
+
+    class Meta:
+        table_name = "live_price_cache"
+
+
+class UserResultFilterRecord(BaseOrmModel):
+    filter_id = CharField(primary_key=True, max_length=64)
+    username = CharField(index=True)
+    name = CharField(max_length=60)
+    query_json = TextField()
+    is_default = BooleanField(default=False, index=True)
+    created_at = CharField(max_length=64)
+    updated_at = CharField(max_length=64)
+
+    class Meta:
+        table_name = "user_result_filters"
+        indexes = (
+            (("username", "name"), True),
+            (("username", "is_default"), False),
+        )
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -279,6 +143,252 @@ def _read_json(path: Path, default: Any) -> Any:
         return default
     with open(path, encoding="utf-8") as file_obj:
         return json.load(file_obj)
+
+
+def _encode_json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=True)
+
+
+def _decode_json(raw: str, default: Any) -> Any:
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def _ensure_database():
+    global _database, _db_initialized
+    if _db_initialized:
+        return _database
+
+    with _db_lock:
+        if _db_initialized:
+            return _database
+
+        database_url = settings.database_url.strip()
+        if not database_url:
+            raise RuntimeError("DATABASE_URL must be configured for PostgreSQL storage")
+        if not database_url.lower().startswith(("postgres://", "postgresql://")):
+            raise RuntimeError("DATABASE_URL must use a PostgreSQL scheme")
+
+        _database = connect(database_url)
+        _db_proxy.initialize(_database)
+
+        with _database.connection_context():
+            _database.create_tables(
+                [
+                    AppMetaRecord,
+                    RunRecord,
+                    ResultRecord,
+                    UploadRecord,
+                    UserRecord,
+                    SessionRecord,
+                    LivePriceCacheRecord,
+                    UserResultFilterRecord,
+                ],
+                safe=True,
+            )
+            _bootstrap_from_legacy_once()
+
+        _db_initialized = True
+        return _database
+
+
+def _db_context():
+    return _ensure_database().connection_context()
+
+
+def _meta_get(key: str) -> str | None:
+    record = AppMetaRecord.get_or_none(AppMetaRecord.key == key)
+    if record is None:
+        return None
+    return record.value
+
+
+def _meta_set(key: str, value: str) -> None:
+    AppMetaRecord.insert(key=key, value=value).on_conflict(
+        conflict_target=[AppMetaRecord.key],
+        update={AppMetaRecord.value: value},
+    ).execute()
+
+
+def _sqlite_has_table(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _bootstrap_from_legacy_once() -> None:
+    if _meta_get("migrated_from_legacy") == "1":
+        return
+
+    _migrate_from_legacy_sqlite()
+    _migrate_from_json_files_if_needed()
+    _meta_set("migrated_from_legacy", "1")
+
+
+def _migrate_from_legacy_sqlite() -> None:
+    if not LEGACY_SQLITE_PATH.exists():
+        return
+
+    conn = sqlite3.connect(LEGACY_SQLITE_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        if _sqlite_has_table(conn, "app_meta"):
+            for row in conn.execute("SELECT key, value FROM app_meta"):
+                _meta_set(str(row["key"]), str(row["value"]))
+
+        if _sqlite_has_table(conn, "runs"):
+            for row in conn.execute("SELECT run_id, username, status, created_at, payload_json FROM runs"):
+                RunRecord.insert(
+                    run_id=str(row["run_id"]),
+                    username=str(row["username"] or ""),
+                    status=str(row["status"] or "queued"),
+                    created_at=str(row["created_at"] or now_iso()),
+                    payload_json=str(row["payload_json"] or "{}"),
+                ).on_conflict(
+                    conflict_target=[RunRecord.run_id],
+                    update={
+                        RunRecord.username: str(row["username"] or ""),
+                        RunRecord.status: str(row["status"] or "queued"),
+                        RunRecord.created_at: str(row["created_at"] or now_iso()),
+                        RunRecord.payload_json: str(row["payload_json"] or "{}"),
+                    },
+                ).execute()
+
+        if _sqlite_has_table(conn, "results"):
+            ResultRecord.delete().execute()
+            for row in conn.execute("SELECT run_id, row_json FROM results ORDER BY id ASC"):
+                ResultRecord.create(
+                    run=str(row["run_id"]),
+                    row_json=str(row["row_json"] or "{}"),
+                )
+
+        if _sqlite_has_table(conn, "uploads"):
+            for row in conn.execute("SELECT upload_id, username, created_at, valid, payload_json FROM uploads"):
+                UploadRecord.insert(
+                    upload_id=str(row["upload_id"]),
+                    username=str(row["username"] or ""),
+                    created_at=str(row["created_at"] or now_iso()),
+                    valid=bool(int(row["valid"] or 0)),
+                    payload_json=str(row["payload_json"] or "{}"),
+                ).on_conflict(
+                    conflict_target=[UploadRecord.upload_id],
+                    update={
+                        UploadRecord.username: str(row["username"] or ""),
+                        UploadRecord.created_at: str(row["created_at"] or now_iso()),
+                        UploadRecord.valid: bool(int(row["valid"] or 0)),
+                        UploadRecord.payload_json: str(row["payload_json"] or "{}"),
+                    },
+                ).execute()
+
+        if _sqlite_has_table(conn, "users"):
+            for row in conn.execute("SELECT username, password_hash, salt, created_at FROM users"):
+                UserRecord.insert(
+                    username=str(row["username"]),
+                    password_hash=str(row["password_hash"]),
+                    salt=str(row["salt"]),
+                    created_at=str(row["created_at"] or now_iso()),
+                ).on_conflict(
+                    conflict_target=[UserRecord.username],
+                    update={
+                        UserRecord.password_hash: str(row["password_hash"]),
+                        UserRecord.salt: str(row["salt"]),
+                        UserRecord.created_at: str(row["created_at"] or now_iso()),
+                    },
+                ).execute()
+
+        if _sqlite_has_table(conn, "sessions"):
+            for row in conn.execute("SELECT token, username, expires_at, created_at FROM sessions"):
+                SessionRecord.insert(
+                    token=str(row["token"]),
+                    username=str(row["username"]),
+                    expires_at=str(row["expires_at"]),
+                    created_at=str(row["created_at"] or now_iso()),
+                ).on_conflict(
+                    conflict_target=[SessionRecord.token],
+                    update={
+                        SessionRecord.username: str(row["username"]),
+                        SessionRecord.expires_at: str(row["expires_at"]),
+                        SessionRecord.created_at: str(row["created_at"] or now_iso()),
+                    },
+                ).execute()
+
+        if _sqlite_has_table(conn, "live_price_cache"):
+            for row in conn.execute(
+                "SELECT symbol, price, quote_as_of, expires_at, updated_at, source FROM live_price_cache"
+            ):
+                LivePriceCacheRecord.insert(
+                    symbol=str(row["symbol"]),
+                    price=float(row["price"]),
+                    quote_as_of=str(row["quote_as_of"]),
+                    expires_at=str(row["expires_at"]),
+                    updated_at=str(row["updated_at"] or now_iso()),
+                    source=str(row["source"] or "google_finance"),
+                ).on_conflict(
+                    conflict_target=[LivePriceCacheRecord.symbol],
+                    update={
+                        LivePriceCacheRecord.price: float(row["price"]),
+                        LivePriceCacheRecord.quote_as_of: str(row["quote_as_of"]),
+                        LivePriceCacheRecord.expires_at: str(row["expires_at"]),
+                        LivePriceCacheRecord.updated_at: str(row["updated_at"] or now_iso()),
+                        LivePriceCacheRecord.source: str(row["source"] or "google_finance"),
+                    },
+                ).execute()
+
+        if _sqlite_has_table(conn, "user_result_filters"):
+            for row in conn.execute(
+                "SELECT filter_id, username, name, query_json, is_default, created_at, updated_at FROM user_result_filters"
+            ):
+                UserResultFilterRecord.insert(
+                    filter_id=str(row["filter_id"]),
+                    username=str(row["username"]),
+                    name=str(row["name"]),
+                    query_json=str(row["query_json"] or "{}"),
+                    is_default=bool(int(row["is_default"] or 0)),
+                    created_at=str(row["created_at"] or now_iso()),
+                    updated_at=str(row["updated_at"] or now_iso()),
+                ).on_conflict(
+                    conflict_target=[UserResultFilterRecord.filter_id],
+                    update={
+                        UserResultFilterRecord.username: str(row["username"]),
+                        UserResultFilterRecord.name: str(row["name"]),
+                        UserResultFilterRecord.query_json: str(row["query_json"] or "{}"),
+                        UserResultFilterRecord.is_default: bool(int(row["is_default"] or 0)),
+                        UserResultFilterRecord.created_at: str(row["created_at"] or now_iso()),
+                        UserResultFilterRecord.updated_at: str(row["updated_at"] or now_iso()),
+                    },
+                ).execute()
+    finally:
+        conn.close()
+
+
+def _migrate_from_json_files_if_needed() -> None:
+    if RunRecord.select().count() == 0:
+        for path in RUNS_DIR.glob("*.json"):
+            payload = _read_json(path, None)
+            if not isinstance(payload, dict):
+                continue
+            run_id = str(payload.get("run_id") or path.stem)
+            save_run(run_id, payload)
+
+    if ResultRecord.select().count() == 0:
+        for path in RESULTS_DIR.glob("*.json"):
+            rows = _read_json(path, [])
+            if not isinstance(rows, list):
+                continue
+            filtered_rows = [row for row in rows if isinstance(row, dict)]
+            save_results(path.stem, filtered_rows)
+
+    if UploadRecord.select().count() == 0:
+        for path in UPLOADS_DIR.glob("*.json"):
+            payload = _read_json(path, None)
+            if not isinstance(payload, dict):
+                continue
+            upload_id = str(payload.get("upload_id") or path.stem)
+            save_upload(upload_id, payload, username=str(payload.get("username", "")))
 
 
 def now_iso() -> str:
@@ -302,233 +412,178 @@ def export_csv_path(run_id: str) -> Path:
 
 
 def save_run(run_id: str, payload: dict[str, Any]) -> None:
-    _init_db()
     username = str(payload.get("username", ""))
     status = str(payload.get("status", "queued"))
     created_at = str(payload.get("created_at", now_iso()))
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO runs(run_id, username, status, created_at, payload_json)
-            VALUES(?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                username = excluded.username,
-                status = excluded.status,
-                created_at = excluded.created_at,
-                payload_json = excluded.payload_json
-            """,
-            (run_id, username, status, created_at, json.dumps(payload, ensure_ascii=True)),
-        )
-        conn.commit()
+    with _db_context():
+        RunRecord.insert(
+            run_id=run_id,
+            username=username,
+            status=status,
+            created_at=created_at,
+            payload_json=_encode_json(payload),
+        ).on_conflict(
+            conflict_target=[RunRecord.run_id],
+            update={
+                RunRecord.username: username,
+                RunRecord.status: status,
+                RunRecord.created_at: created_at,
+                RunRecord.payload_json: _encode_json(payload),
+            },
+        ).execute()
 
 
 def load_run(run_id: str) -> dict[str, Any] | None:
-    _init_db()
-    with _connect() as conn:
-        row = conn.execute("SELECT payload_json FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-    if row is None:
-        return None
-    return json.loads(str(row["payload_json"]))
+    with _db_context():
+        record = RunRecord.get_or_none(RunRecord.run_id == run_id)
+        if record is None:
+            return None
+        return _decode_json(record.payload_json, {})
 
 
 def list_runs_payloads(username: str | None = None) -> list[dict[str, Any]]:
-    _init_db()
-    with _connect() as conn:
-        if username is None:
-            rows = conn.execute("SELECT payload_json FROM runs").fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT payload_json FROM runs WHERE username = ?",
-                (username,),
-            ).fetchall()
-    return [json.loads(str(row["payload_json"])) for row in rows]
+    with _db_context():
+        query = RunRecord.select()
+        if username is not None:
+            query = query.where(RunRecord.username == username)
+        return [_decode_json(record.payload_json, {}) for record in query]
 
 
 def save_results(run_id: str, rows: list[dict[str, Any]]) -> None:
-    _init_db()
-    with _connect() as conn:
-        conn.execute("DELETE FROM results WHERE run_id = ?", (run_id,))
-        for row in rows:
-            conn.execute(
-                "INSERT INTO results(run_id, row_json) VALUES(?, ?)",
-                (run_id, json.dumps(row, ensure_ascii=True)),
-            )
-        conn.commit()
+    with _db_context():
+        ResultRecord.delete().where(ResultRecord.run == run_id).execute()
+        if not rows:
+            return
+        ResultRecord.insert_many(
+            [{"run": run_id, "row_json": _encode_json(row)} for row in rows]
+        ).execute()
 
 
 def load_results(run_id: str) -> list[dict[str, Any]]:
-    _init_db()
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT row_json FROM results WHERE run_id = ? ORDER BY id ASC",
-            (run_id,),
-        ).fetchall()
-    return [json.loads(str(row["row_json"])) for row in rows]
+    with _db_context():
+        query = ResultRecord.select().where(ResultRecord.run == run_id).order_by(ResultRecord.id.asc())
+        return [_decode_json(record.row_json, {}) for record in query]
 
 
 def append_result(run_id: str, row: dict[str, Any]) -> None:
-    _init_db()
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO results(run_id, row_json) VALUES(?, ?)",
-            (run_id, json.dumps(row, ensure_ascii=True)),
-        )
-        conn.commit()
+    with _db_context():
+        ResultRecord.create(run=run_id, row_json=_encode_json(row))
 
 
 def save_upload(upload_id: str, payload: dict[str, Any], username: str) -> None:
-    _init_db()
     created_at = str(payload.get("created_at", now_iso()))
-    valid = 1 if bool(payload.get("valid", False)) else 0
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO uploads(upload_id, username, created_at, valid, payload_json)
-            VALUES(?, ?, ?, ?, ?)
-            ON CONFLICT(upload_id) DO UPDATE SET
-                username = excluded.username,
-                created_at = excluded.created_at,
-                valid = excluded.valid,
-                payload_json = excluded.payload_json
-            """,
-            (upload_id, username, created_at, valid, json.dumps(payload, ensure_ascii=True)),
-        )
-        conn.commit()
+    valid = bool(payload.get("valid", False))
+    with _db_context():
+        UploadRecord.insert(
+            upload_id=upload_id,
+            username=username,
+            created_at=created_at,
+            valid=valid,
+            payload_json=_encode_json(payload),
+        ).on_conflict(
+            conflict_target=[UploadRecord.upload_id],
+            update={
+                UploadRecord.username: username,
+                UploadRecord.created_at: created_at,
+                UploadRecord.valid: valid,
+                UploadRecord.payload_json: _encode_json(payload),
+            },
+        ).execute()
 
 
 def load_upload(upload_id: str, username: str | None = None) -> dict[str, Any] | None:
-    _init_db()
-    with _connect() as conn:
-        if username is None:
-            row = conn.execute("SELECT payload_json FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT payload_json FROM uploads WHERE upload_id = ? AND username = ?",
-                (upload_id, username),
-            ).fetchone()
-    if row is None:
-        return None
-    return json.loads(str(row["payload_json"]))
+    with _db_context():
+        query = UploadRecord.select().where(UploadRecord.upload_id == upload_id)
+        if username is not None:
+            query = query.where(UploadRecord.username == username)
+        record = query.get_or_none()
+        if record is None:
+            return None
+        return _decode_json(record.payload_json, {})
 
 
 def count_users() -> int:
-    _init_db()
-    with _connect() as conn:
-        row = conn.execute("SELECT COUNT(*) AS total FROM users").fetchone()
-    if row is None:
-        return 0
-    return int(row["total"])
+    with _db_context():
+        return UserRecord.select().count()
 
 
 def load_user(username: str) -> dict[str, Any] | None:
-    _init_db()
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT username, password_hash, salt, created_at
-            FROM users
-            WHERE username = ?
-            """,
-            (username,),
-        ).fetchone()
-    if row is None:
-        return None
-
-    return {
-        "username": str(row["username"]),
-        "password_hash": str(row["password_hash"]),
-        "salt": str(row["salt"]),
-        "created_at": str(row["created_at"]),
-    }
+    with _db_context():
+        record = UserRecord.get_or_none(UserRecord.username == username)
+        if record is None:
+            return None
+        return {
+            "username": record.username,
+            "password_hash": record.password_hash,
+            "salt": record.salt,
+            "created_at": record.created_at,
+        }
 
 
 def save_user(username: str, password_hash: str, salt: str) -> None:
-    _init_db()
     created_at = now_iso()
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO users(username, password_hash, salt, created_at)
-            VALUES(?, ?, ?, ?)
-            """,
-            (username, password_hash, salt, created_at),
+    with _db_context():
+        UserRecord.create(
+            username=username,
+            password_hash=password_hash,
+            salt=salt,
+            created_at=created_at,
         )
-        conn.commit()
 
 
 def save_session(token: str, username: str, expires_at: str) -> None:
-    _init_db()
     created_at = now_iso()
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO sessions(token, username, expires_at, created_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(token) DO UPDATE SET
-                username = excluded.username,
-                expires_at = excluded.expires_at
-            """,
-            (token, username, expires_at, created_at),
-        )
-        conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (created_at,))
-        conn.commit()
+    with _db_context():
+        SessionRecord.insert(
+            token=token,
+            username=username,
+            expires_at=expires_at,
+            created_at=created_at,
+        ).on_conflict(
+            conflict_target=[SessionRecord.token],
+            update={
+                SessionRecord.username: username,
+                SessionRecord.expires_at: expires_at,
+                SessionRecord.created_at: created_at,
+            },
+        ).execute()
+        SessionRecord.delete().where(SessionRecord.expires_at <= created_at).execute()
 
 
 def load_session(token: str) -> dict[str, Any] | None:
-    _init_db()
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT token, username, expires_at, created_at
-            FROM sessions
-            WHERE token = ?
-            """,
-            (token,),
-        ).fetchone()
-    if row is None:
-        return None
-
-    return {
-        "token": str(row["token"]),
-        "username": str(row["username"]),
-        "expires_at": str(row["expires_at"]),
-        "created_at": str(row["created_at"]),
-    }
+    with _db_context():
+        record = SessionRecord.get_or_none(SessionRecord.token == token)
+        if record is None:
+            return None
+        return {
+            "token": record.token,
+            "username": record.username,
+            "expires_at": record.expires_at,
+            "created_at": record.created_at,
+        }
 
 
 def delete_session(token: str) -> None:
-    _init_db()
-    with _connect() as conn:
-        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
-        conn.commit()
+    with _db_context():
+        SessionRecord.delete().where(SessionRecord.token == token).execute()
 
 
 def load_live_price_cache(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    _init_db()
     clean_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
     if not clean_symbols:
         return {}
 
-    placeholders = ",".join(["?"] * len(clean_symbols))
-    params = [*clean_symbols]
-    query = (
-        "SELECT symbol, price, quote_as_of, expires_at, source "
-        "FROM live_price_cache "
-        f"WHERE symbol IN ({placeholders})"
-    )
-
-    with _connect() as conn:
-        rows = conn.execute(query, params).fetchall()
-
-    cached: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        cached[str(row["symbol"])]= {
-            "price": float(row["price"]),
-            "quote_as_of": str(row["quote_as_of"]),
-            "expires_at": str(row["expires_at"]),
-            "source": str(row["source"]),
+    with _db_context():
+        query = LivePriceCacheRecord.select().where(LivePriceCacheRecord.symbol.in_(clean_symbols))
+        return {
+            record.symbol: {
+                "price": float(record.price),
+                "quote_as_of": record.quote_as_of,
+                "expires_at": record.expires_at,
+                "source": record.source,
+            }
+            for record in query
         }
-    return cached
 
 
 def save_live_price_cache(
@@ -537,64 +592,54 @@ def save_live_price_cache(
     expires_at: str,
     source: str = "google_finance",
 ) -> None:
-    _init_db()
     if not quotes:
         return
 
     updated_at = now_iso()
-    rows = [
-        (symbol.strip().upper(), float(price), quote_as_of, expires_at, updated_at, source)
-        for symbol, price in quotes.items()
-        if symbol.strip()
-    ]
-    if not rows:
-        return
-
-    with _connect() as conn:
-        conn.executemany(
-            """
-            INSERT INTO live_price_cache(symbol, price, quote_as_of, expires_at, updated_at, source)
-            VALUES(?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                price = excluded.price,
-                quote_as_of = excluded.quote_as_of,
-                expires_at = excluded.expires_at,
-                updated_at = excluded.updated_at,
-                source = excluded.source
-            """,
-            rows,
-        )
-        conn.execute("DELETE FROM live_price_cache WHERE expires_at <= ?", (updated_at,))
-        conn.commit()
+    with _db_context():
+        for symbol, price in quotes.items():
+            normalized_symbol = symbol.strip().upper()
+            if not normalized_symbol:
+                continue
+            LivePriceCacheRecord.insert(
+                symbol=normalized_symbol,
+                price=float(price),
+                quote_as_of=quote_as_of,
+                expires_at=expires_at,
+                updated_at=updated_at,
+                source=source,
+            ).on_conflict(
+                conflict_target=[LivePriceCacheRecord.symbol],
+                update={
+                    LivePriceCacheRecord.price: float(price),
+                    LivePriceCacheRecord.quote_as_of: quote_as_of,
+                    LivePriceCacheRecord.expires_at: expires_at,
+                    LivePriceCacheRecord.updated_at: updated_at,
+                    LivePriceCacheRecord.source: source,
+                },
+            ).execute()
+        LivePriceCacheRecord.delete().where(LivePriceCacheRecord.expires_at <= updated_at).execute()
 
 
 def list_user_result_filters(username: str) -> list[dict[str, Any]]:
-    _init_db()
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT filter_id, username, name, query_json, is_default, created_at, updated_at
-            FROM user_result_filters
-            WHERE username = ?
-            ORDER BY is_default DESC, updated_at DESC
-            """,
-            (username,),
-        ).fetchall()
-
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        items.append(
-            {
-                "filter_id": str(row["filter_id"]),
-                "username": str(row["username"]),
-                "name": str(row["name"]),
-                "query": json.loads(str(row["query_json"])),
-                "is_default": bool(int(row["is_default"])),
-                "created_at": str(row["created_at"]),
-                "updated_at": str(row["updated_at"]),
-            }
+    with _db_context():
+        query = (
+            UserResultFilterRecord.select()
+            .where(UserResultFilterRecord.username == username)
+            .order_by(UserResultFilterRecord.is_default.desc(), UserResultFilterRecord.updated_at.desc())
         )
-    return items
+        return [
+            {
+                "filter_id": record.filter_id,
+                "username": record.username,
+                "name": record.name,
+                "query": _decode_json(record.query_json, {}),
+                "is_default": bool(record.is_default),
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+            }
+            for record in query
+        ]
 
 
 def save_user_result_filter(
@@ -605,7 +650,6 @@ def save_user_result_filter(
     max_filters: int = 5,
     filter_id: str | None = None,
 ) -> dict[str, Any]:
-    _init_db()
     now = now_iso()
     normalized_name = name.strip()
     if not normalized_name:
@@ -615,137 +659,95 @@ def save_user_result_filter(
     if not next_filter_id:
         raise RuntimeError("Filter id is required")
 
-    with _connect() as conn:
-        existing = conn.execute(
-            """
-            SELECT filter_id, created_at
-            FROM user_result_filters
-            WHERE filter_id = ? AND username = ?
-            """,
-            (next_filter_id, username),
-        ).fetchone()
+    with _db_context():
+        existing = UserResultFilterRecord.get_or_none(
+            (UserResultFilterRecord.filter_id == next_filter_id)
+            & (UserResultFilterRecord.username == username)
+        )
 
         if existing is None:
-            count_row = conn.execute(
-                "SELECT COUNT(*) AS total FROM user_result_filters WHERE username = ?",
-                (username,),
-            ).fetchone()
-            total = int(count_row["total"]) if count_row else 0
+            total = UserResultFilterRecord.select().where(UserResultFilterRecord.username == username).count()
             if total >= max_filters:
                 raise RuntimeError(f"You can save up to {max_filters} favorite filters")
             created_at = now
-            conn.execute(
-                """
-                INSERT INTO user_result_filters(
-                    filter_id, username, name, query_json, is_default, created_at, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    next_filter_id,
-                    username,
-                    normalized_name,
-                    json.dumps(query, ensure_ascii=True),
-                    1 if is_default else 0,
-                    created_at,
-                    now,
-                ),
+            record = UserResultFilterRecord(
+                filter_id=next_filter_id,
+                username=username,
+                name=normalized_name,
+                query_json=_encode_json(query),
+                is_default=bool(is_default),
+                created_at=created_at,
+                updated_at=now,
             )
         else:
-            created_at = str(existing["created_at"])
-            conn.execute(
-                """
-                UPDATE user_result_filters
-                SET name = ?, query_json = ?, is_default = ?, updated_at = ?
-                WHERE filter_id = ? AND username = ?
-                """,
-                (
-                    normalized_name,
-                    json.dumps(query, ensure_ascii=True),
-                    1 if is_default else 0,
-                    now,
-                    next_filter_id,
-                    username,
-                ),
-            )
+            created_at = existing.created_at
+            record = existing
+            record.name = normalized_name
+            record.query_json = _encode_json(query)
+            record.is_default = bool(is_default)
+            record.updated_at = now
+
+        try:
+            record.save(force_insert=existing is None)
+        except IntegrityError as err:
+            raise RuntimeError("Favorite filter name already exists") from err
 
         if is_default:
-            conn.execute(
-                """
-                UPDATE user_result_filters
-                SET is_default = 0
-                WHERE username = ? AND filter_id != ?
-                """,
-                (username, next_filter_id),
+            (
+                UserResultFilterRecord.update(is_default=False)
+                .where(
+                    (UserResultFilterRecord.username == username)
+                    & (UserResultFilterRecord.filter_id != next_filter_id)
+                )
+                .execute()
             )
 
-        conn.commit()
-
-    return {
-        "filter_id": next_filter_id,
-        "username": username,
-        "name": normalized_name,
-        "query": query,
-        "is_default": bool(is_default),
-        "created_at": created_at,
-        "updated_at": now,
-    }
+        return {
+            "filter_id": next_filter_id,
+            "username": username,
+            "name": normalized_name,
+            "query": query,
+            "is_default": bool(is_default),
+            "created_at": created_at,
+            "updated_at": now,
+        }
 
 
 def delete_user_result_filter(username: str, filter_id: str) -> bool:
-    _init_db()
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT is_default FROM user_result_filters WHERE username = ? AND filter_id = ?",
-            (username, filter_id),
-        ).fetchone()
-        if row is None:
+    with _db_context():
+        record = UserResultFilterRecord.get_or_none(
+            (UserResultFilterRecord.username == username)
+            & (UserResultFilterRecord.filter_id == filter_id)
+        )
+        if record is None:
             return False
 
-        was_default = bool(int(row["is_default"]))
-        conn.execute(
-            "DELETE FROM user_result_filters WHERE username = ? AND filter_id = ?",
-            (username, filter_id),
-        )
+        was_default = bool(record.is_default)
+        record.delete_instance()
 
         if was_default:
-            next_row = conn.execute(
-                """
-                SELECT filter_id
-                FROM user_result_filters
-                WHERE username = ?
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (username,),
-            ).fetchone()
-            if next_row is not None:
-                conn.execute(
-                    "UPDATE user_result_filters SET is_default = 1 WHERE filter_id = ?",
-                    (str(next_row["filter_id"]),),
-                )
+            next_record = (
+                UserResultFilterRecord.select()
+                .where(UserResultFilterRecord.username == username)
+                .order_by(UserResultFilterRecord.updated_at.desc())
+                .first()
+            )
+            if next_record is not None:
+                next_record.is_default = True
+                next_record.save()
 
-        conn.commit()
-    return True
+        return True
 
 
 def count_legacy_ownerless_records() -> dict[str, int]:
-    _init_db()
-    with _connect() as conn:
-        runs_row = conn.execute(
-            "SELECT COUNT(*) AS total FROM runs WHERE username IS NULL OR username = ''"
-        ).fetchone()
-        uploads_row = conn.execute(
-            "SELECT COUNT(*) AS total FROM uploads WHERE username IS NULL OR username = ''"
-        ).fetchone()
-
-    return {
-        "runs": int(runs_row["total"]) if runs_row else 0,
-        "uploads": int(uploads_row["total"]) if uploads_row else 0,
-    }
+    with _db_context():
+        return {
+            "runs": RunRecord.select().where((RunRecord.username.is_null()) | (RunRecord.username == "")).count(),
+            "uploads": UploadRecord.select().where((UploadRecord.username.is_null()) | (UploadRecord.username == "")).count(),
+        }
 
 
 def backfill_legacy_ownership(username: str) -> dict[str, int]:
-    _init_db()
     owner = username.strip()
     if not owner:
         raise RuntimeError("username is required for backfill")
@@ -753,52 +755,26 @@ def backfill_legacy_ownership(username: str) -> dict[str, int]:
     migrated_runs = 0
     migrated_uploads = 0
 
-    with _connect() as conn:
-        run_rows = conn.execute(
-            """
-            SELECT run_id, payload_json
-            FROM runs
-            WHERE username IS NULL OR username = ''
-            """
-        ).fetchall()
-        for row in run_rows:
-            payload = json.loads(str(row["payload_json"]))
+    with _db_context():
+        for record in RunRecord.select().where((RunRecord.username.is_null()) | (RunRecord.username == "")):
+            payload = _decode_json(record.payload_json, {})
             if not isinstance(payload, dict):
                 payload = {}
             payload["username"] = owner
-            conn.execute(
-                """
-                UPDATE runs
-                SET username = ?, payload_json = ?
-                WHERE run_id = ?
-                """,
-                (owner, json.dumps(payload, ensure_ascii=True), str(row["run_id"])),
-            )
+            record.username = owner
+            record.payload_json = _encode_json(payload)
+            record.save()
             migrated_runs += 1
 
-        upload_rows = conn.execute(
-            """
-            SELECT upload_id, payload_json
-            FROM uploads
-            WHERE username IS NULL OR username = ''
-            """
-        ).fetchall()
-        for row in upload_rows:
-            payload = json.loads(str(row["payload_json"]))
+        for record in UploadRecord.select().where((UploadRecord.username.is_null()) | (UploadRecord.username == "")):
+            payload = _decode_json(record.payload_json, {})
             if not isinstance(payload, dict):
                 payload = {}
             payload["username"] = owner
-            conn.execute(
-                """
-                UPDATE uploads
-                SET username = ?, payload_json = ?
-                WHERE upload_id = ?
-                """,
-                (owner, json.dumps(payload, ensure_ascii=True), str(row["upload_id"])),
-            )
+            record.username = owner
+            record.payload_json = _encode_json(payload)
+            record.save()
             migrated_uploads += 1
-
-        conn.commit()
 
     return {
         "runs": migrated_runs,

@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: growth-gap-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: growth_gap_strategy
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d growth_gap_strategy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: growth-gap-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: growth-gap-backend
+    restart: unless-stopped
+    env_file:
+      - backend/.env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend_runtime:/srv/Growth-gap-Stratedy/backend/runtime
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: growth-gap-worker
+    restart: unless-stopped
+    env_file:
+      - backend/.env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--pool=solo"]
+    volumes:
+      - backend_runtime:/srv/Growth-gap-Stratedy/backend/runtime
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    container_name: growth-gap-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "80:80"
+
+volumes:
+  postgres_data:
+  backend_runtime:

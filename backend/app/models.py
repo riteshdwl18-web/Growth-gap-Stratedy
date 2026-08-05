@@ -122,6 +122,7 @@ class AuthStatusResponse(BaseModel):
     authenticated: bool
     username: str | None = None
     signup_required: bool = False
+    google_oauth_available: bool = False
 
 
 class UploadValidationResponse(BaseModel):
@@ -155,6 +156,10 @@ class ResultFilterQuery(BaseModel):
     market_cap_min: str = ""
     market_cap_max: str = ""
     industry_group: str = ""
+    total_2y_growth_min: str = ""
+    total_2y_growth_max: str = ""
+    ttm_vs_end_fy_min: str = ""
+    ttm_vs_end_fy_max: str = ""
     combined_growth_min: str = ""
     combined_growth_max: str = ""
     roce_min: str = ""

@@ -72,6 +72,19 @@ app = FastAPI(title=settings.app_name, version=settings.app_version)
 
 MAX_USER_RESULT_FILTERS = 5
 
+
+def _cookie_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "httponly": True,
+        "samesite": settings.session_cookie_samesite,
+        "secure": settings.session_cookie_secure,
+        "max_age": settings.session_ttl_minutes * 60,
+        "path": "/",
+    }
+    if settings.session_cookie_domain:
+        kwargs["domain"] = settings.session_cookie_domain
+    return kwargs
+
 def _auth_username(request: Request) -> str:
     username = str(getattr(request.state, "auth_username", "")).strip()
     if not username:
@@ -123,15 +136,13 @@ def login(payload: LoginRequest, response: Response) -> AuthStatusResponse:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_session(username)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        max_age=settings.session_ttl_minutes * 60,
+    response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
+    return AuthStatusResponse(
+        authenticated=True,
+        username=username,
+        signup_required=False,
+        google_oauth_available=is_google_oauth_available(),
     )
-    return AuthStatusResponse(authenticated=True, username=username, signup_required=False)
 
 
 @app.post("/api/auth/signup", response_model=AuthStatusResponse)
@@ -148,15 +159,13 @@ def signup(payload: SignupRequest, response: Response) -> AuthStatusResponse:
         raise HTTPException(status_code=409, detail="Username already exists")
 
     token = create_session(username)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        max_age=settings.session_ttl_minutes * 60,
+    response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
+    return AuthStatusResponse(
+        authenticated=True,
+        username=username,
+        signup_required=False,
+        google_oauth_available=is_google_oauth_available(),
     )
-    return AuthStatusResponse(authenticated=True, username=username, signup_required=False)
 
 
 @app.get("/api/auth/google/start")
@@ -184,14 +193,7 @@ def google_oauth_callback(code: str = Query(default=""), state: str = Query(defa
 
     token = create_session(username)
     response = RedirectResponse(url=frontend_redirect)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        max_age=settings.session_ttl_minutes * 60,
-    )
+    response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
     return response
 
 
@@ -199,8 +201,21 @@ def google_oauth_callback(code: str = Query(default=""), state: str = Query(defa
 def logout(request: Request, response: Response) -> AuthStatusResponse:
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
     invalidate_session(token)
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/", samesite="lax")
-    return AuthStatusResponse(authenticated=False, username=None, signup_required=not has_any_user())
+    delete_kwargs: dict[str, object] = {
+        "key": SESSION_COOKIE_NAME,
+        "path": "/",
+        "samesite": settings.session_cookie_samesite,
+        "secure": settings.session_cookie_secure,
+    }
+    if settings.session_cookie_domain:
+        delete_kwargs["domain"] = settings.session_cookie_domain
+    response.delete_cookie(**delete_kwargs)
+    return AuthStatusResponse(
+        authenticated=False,
+        username=None,
+        signup_required=not has_any_user(),
+        google_oauth_available=is_google_oauth_available(),
+    )
 
 
 @app.get("/api/auth/me", response_model=AuthStatusResponse)
@@ -212,8 +227,14 @@ def me(request: Request) -> AuthStatusResponse:
             authenticated=False,
             username=None,
             signup_required=not has_any_user(),
+            google_oauth_available=is_google_oauth_available(),
         )
-    return AuthStatusResponse(authenticated=True, username=username, signup_required=False)
+    return AuthStatusResponse(
+        authenticated=True,
+        username=username,
+        signup_required=False,
+        google_oauth_available=is_google_oauth_available(),
+    )
 
 
 @app.post("/api/runs", response_model=RunSummary)
@@ -381,6 +402,10 @@ def fetch_run_results(
     market_cap_min: str = Query(default="", max_length=30),
     market_cap_max: str = Query(default="", max_length=30),
     industry_group: str = Query(default="", max_length=120),
+    total_2y_growth_min: str = Query(default="", max_length=30),
+    total_2y_growth_max: str = Query(default="", max_length=30),
+    ttm_vs_end_fy_min: str = Query(default="", max_length=30),
+    ttm_vs_end_fy_max: str = Query(default="", max_length=30),
     combined_growth_min: str = Query(default="", max_length=30),
     combined_growth_max: str = Query(default="", max_length=30),
     roce_min: str = Query(default="", max_length=30),
@@ -402,6 +427,10 @@ def fetch_run_results(
         market_cap_min=market_cap_min,
         market_cap_max=market_cap_max,
         industry_group=industry_group,
+        total_2y_growth_min=total_2y_growth_min,
+        total_2y_growth_max=total_2y_growth_max,
+        ttm_vs_end_fy_min=ttm_vs_end_fy_min,
+        ttm_vs_end_fy_max=ttm_vs_end_fy_max,
         combined_growth_min=combined_growth_min,
         combined_growth_max=combined_growth_max,
         roce_min=roce_min,
@@ -445,6 +474,10 @@ def export_run_results_csv(
     market_cap_min: str = Query(default="", max_length=30),
     market_cap_max: str = Query(default="", max_length=30),
     industry_group: str = Query(default="", max_length=120),
+    total_2y_growth_min: str = Query(default="", max_length=30),
+    total_2y_growth_max: str = Query(default="", max_length=30),
+    ttm_vs_end_fy_min: str = Query(default="", max_length=30),
+    ttm_vs_end_fy_max: str = Query(default="", max_length=30),
     combined_growth_min: str = Query(default="", max_length=30),
     combined_growth_max: str = Query(default="", max_length=30),
     roce_min: str = Query(default="", max_length=30),
@@ -464,6 +497,10 @@ def export_run_results_csv(
         market_cap_min=market_cap_min,
         market_cap_max=market_cap_max,
         industry_group=industry_group,
+        total_2y_growth_min=total_2y_growth_min,
+        total_2y_growth_max=total_2y_growth_max,
+        ttm_vs_end_fy_min=ttm_vs_end_fy_min,
+        ttm_vs_end_fy_max=ttm_vs_end_fy_max,
         combined_growth_min=combined_growth_min,
         combined_growth_max=combined_growth_max,
         roce_min=roce_min,

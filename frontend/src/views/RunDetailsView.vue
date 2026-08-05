@@ -40,6 +40,10 @@ const filterDraft = reactive({
   market_cap_min: '',
   market_cap_max: '',
   industry_groups: [] as string[],
+  total_2y_growth_min: '',
+  total_2y_growth_max: '',
+  ttm_vs_end_fy_min: '',
+  ttm_vs_end_fy_max: '',
   combined_growth_min: '',
   combined_growth_max: '',
   roce_min: '',
@@ -125,6 +129,10 @@ function buildFavoriteQueryFromDraft(): FavoriteResultsFilterQuery {
     industry_group: normalizeIndustrySelection(filterDraft.industry_groups, []).includes(INDUSTRY_ALL_VALUE)
       ? ''
       : normalizeIndustrySelection(filterDraft.industry_groups, []).join(','),
+    total_2y_growth_min: filterDraft.total_2y_growth_min.trim(),
+    total_2y_growth_max: filterDraft.total_2y_growth_max.trim(),
+    ttm_vs_end_fy_min: filterDraft.ttm_vs_end_fy_min.trim(),
+    ttm_vs_end_fy_max: filterDraft.ttm_vs_end_fy_max.trim(),
     combined_growth_min: filterDraft.combined_growth_min.trim(),
     combined_growth_max: filterDraft.combined_growth_max.trim(),
     roce_min: filterDraft.roce_min.trim(),
@@ -290,6 +298,10 @@ function resetResultsFilters(): void {
   controller.resultsQuery.market_cap_min = ''
   controller.resultsQuery.market_cap_max = ''
   controller.resultsQuery.industry_group = ''
+  controller.resultsQuery.total_2y_growth_min = ''
+  controller.resultsQuery.total_2y_growth_max = ''
+  controller.resultsQuery.ttm_vs_end_fy_min = ''
+  controller.resultsQuery.ttm_vs_end_fy_max = ''
   controller.resultsQuery.combined_growth_min = ''
   controller.resultsQuery.combined_growth_max = ''
   controller.resultsQuery.roce_min = ''
@@ -342,6 +354,10 @@ function syncDraftFromQuery(): void {
   filterDraft.market_cap_min = controller.resultsQuery.market_cap_min
   filterDraft.market_cap_max = controller.resultsQuery.market_cap_max
   filterDraft.industry_groups = parseIndustryGroupsFromQuery(controller.resultsQuery.industry_group)
+  filterDraft.total_2y_growth_min = controller.resultsQuery.total_2y_growth_min
+  filterDraft.total_2y_growth_max = controller.resultsQuery.total_2y_growth_max
+  filterDraft.ttm_vs_end_fy_min = controller.resultsQuery.ttm_vs_end_fy_min
+  filterDraft.ttm_vs_end_fy_max = controller.resultsQuery.ttm_vs_end_fy_max
   filterDraft.combined_growth_min = controller.resultsQuery.combined_growth_min
   filterDraft.combined_growth_max = controller.resultsQuery.combined_growth_max
   filterDraft.roce_min = controller.resultsQuery.roce_min
@@ -356,20 +372,26 @@ function openFilterDialog(): void {
 }
 
 function applyAdvancedFilters(): void {
+  const normalized = (value: unknown): string => String(value ?? '').trim()
+
   controller.resultsQuery.final_status = filterDraft.final_status
-  controller.resultsQuery.market_cap_min = filterDraft.market_cap_min.trim()
-  controller.resultsQuery.market_cap_max = filterDraft.market_cap_max.trim()
+  controller.resultsQuery.market_cap_min = normalized(filterDraft.market_cap_min)
+  controller.resultsQuery.market_cap_max = normalized(filterDraft.market_cap_max)
   filterDraft.industry_groups = normalizeIndustrySelection(filterDraft.industry_groups, [])
   controller.resultsQuery.industry_group =
     filterDraft.industry_groups.includes(INDUSTRY_ALL_VALUE)
       ? ''
       : filterDraft.industry_groups.join(',')
-  controller.resultsQuery.combined_growth_min = filterDraft.combined_growth_min.trim()
-  controller.resultsQuery.combined_growth_max = filterDraft.combined_growth_max.trim()
-  controller.resultsQuery.roce_min = filterDraft.roce_min.trim()
-  controller.resultsQuery.roce_max = filterDraft.roce_max.trim()
-  controller.resultsQuery.away_min = filterDraft.away_min.trim()
-  controller.resultsQuery.away_max = filterDraft.away_max.trim()
+  controller.resultsQuery.total_2y_growth_min = normalized(filterDraft.total_2y_growth_min)
+  controller.resultsQuery.total_2y_growth_max = normalized(filterDraft.total_2y_growth_max)
+  controller.resultsQuery.ttm_vs_end_fy_min = normalized(filterDraft.ttm_vs_end_fy_min)
+  controller.resultsQuery.ttm_vs_end_fy_max = normalized(filterDraft.ttm_vs_end_fy_max)
+  controller.resultsQuery.combined_growth_min = normalized(filterDraft.combined_growth_min)
+  controller.resultsQuery.combined_growth_max = normalized(filterDraft.combined_growth_max)
+  controller.resultsQuery.roce_min = normalized(filterDraft.roce_min)
+  controller.resultsQuery.roce_max = normalized(filterDraft.roce_max)
+  controller.resultsQuery.away_min = normalized(filterDraft.away_min)
+  controller.resultsQuery.away_max = normalized(filterDraft.away_max)
   filterDialogOpen.value = false
   controller.applyResultsFilters()
 }
@@ -379,6 +401,10 @@ function clearAdvancedFilters(): void {
   filterDraft.market_cap_min = ''
   filterDraft.market_cap_max = ''
   filterDraft.industry_groups = []
+  filterDraft.total_2y_growth_min = ''
+  filterDraft.total_2y_growth_max = ''
+  filterDraft.ttm_vs_end_fy_min = ''
+  filterDraft.ttm_vs_end_fy_max = ''
   filterDraft.combined_growth_min = ''
   filterDraft.combined_growth_max = ''
   filterDraft.roce_min = ''
@@ -730,6 +756,16 @@ const activeAdvancedFilters = computed(() => {
     if (labels.length > 0) {
       items.push(`Industry ${labels.join(', ')}`)
     }
+  }
+  if (controller.resultsQuery.total_2y_growth_min || controller.resultsQuery.total_2y_growth_max) {
+    const min = controller.resultsQuery.total_2y_growth_min || '-'
+    const max = controller.resultsQuery.total_2y_growth_max || '-'
+    items.push(`Total 2Y% ${min} to ${max}`)
+  }
+  if (controller.resultsQuery.ttm_vs_end_fy_min || controller.resultsQuery.ttm_vs_end_fy_max) {
+    const min = controller.resultsQuery.ttm_vs_end_fy_min || '-'
+    const max = controller.resultsQuery.ttm_vs_end_fy_max || '-'
+    items.push(`TTM vs End FY% ${min} to ${max}`)
   }
   if (controller.resultsQuery.combined_growth_min || controller.resultsQuery.combined_growth_max) {
     const min = controller.resultsQuery.combined_growth_min || '-'
@@ -1424,6 +1460,42 @@ watch(
                   v-model="filterDraft.market_cap_max"
                   label="Market Cap Max"
                   placeholder="10000"
+                  type="number"
+                  clearable
+                />
+              </v-col>
+              <v-col cols="12" md="3">
+                <v-text-field
+                  v-model="filterDraft.total_2y_growth_min"
+                  label="Total 2Y % Min"
+                  placeholder="32"
+                  type="number"
+                  clearable
+                />
+              </v-col>
+              <v-col cols="12" md="3">
+                <v-text-field
+                  v-model="filterDraft.total_2y_growth_max"
+                  label="Total 2Y % Max"
+                  placeholder="80"
+                  type="number"
+                  clearable
+                />
+              </v-col>
+              <v-col cols="12" md="3">
+                <v-text-field
+                  v-model="filterDraft.ttm_vs_end_fy_min"
+                  label="TTM vs End FY % Min"
+                  placeholder="5"
+                  type="number"
+                  clearable
+                />
+              </v-col>
+              <v-col cols="12" md="3">
+                <v-text-field
+                  v-model="filterDraft.ttm_vs_end_fy_max"
+                  label="TTM vs End FY % Max"
+                  placeholder="50"
                   type="number"
                   clearable
                 />

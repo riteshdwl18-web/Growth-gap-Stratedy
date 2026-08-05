@@ -2,6 +2,7 @@ export type AuthStatusResponse = {
   authenticated: boolean
   username: string | null
   signup_required: boolean
+  google_oauth_available: boolean
 }
 
 export type LoginPayload = {
@@ -16,7 +17,7 @@ export type SignupPayload = {
 
 export const API_BASE =
   normalizeLoopbackApiBase(
-    import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:8000`,
+    import.meta.env.VITE_API_BASE_URL ?? window.location.origin,
   )
 
 function normalizeLoopbackApiBase(rawBase: string): string {
@@ -41,11 +42,11 @@ export async function getAuthStatus(): Promise<AuthStatusResponse> {
       credentials: 'include',
     })
     if (!response.ok) {
-      return { authenticated: false, username: null, signup_required: false }
+      return { authenticated: false, username: null, signup_required: false, google_oauth_available: false }
     }
     return (await response.json()) as AuthStatusResponse
   } catch {
-    return { authenticated: false, username: null, signup_required: false }
+    return { authenticated: false, username: null, signup_required: false, google_oauth_available: false }
   }
 }
 

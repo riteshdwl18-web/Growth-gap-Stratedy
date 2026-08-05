@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { login, startGoogleSignIn } from '../services/auth'
+import { getAuthStatus, login, startGoogleSignIn } from '../services/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -12,6 +12,7 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
+const googleSignInAvailable = ref(false)
 
 async function submitLogin(): Promise<void> {
   errorMessage.value = ''
@@ -31,9 +32,17 @@ async function submitLogin(): Promise<void> {
 }
 
 function signInWithGoogle(): void {
+  if (!googleSignInAvailable.value) {
+    return
+  }
   const redirectTo = String(route.query.redirect ?? '/dashboard')
   startGoogleSignIn(redirectTo)
 }
+
+onMounted(async () => {
+  const authStatus = await getAuthStatus()
+  googleSignInAvailable.value = authStatus.google_oauth_available
+})
 </script>
 
 <template>
@@ -123,6 +132,7 @@ function signInWithGoogle(): void {
                 </v-btn>
 
                 <v-btn
+                  v-if="googleSignInAvailable"
                   block
                   variant="outlined"
                   color="secondary"

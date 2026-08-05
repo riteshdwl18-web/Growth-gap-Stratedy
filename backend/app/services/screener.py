@@ -355,6 +355,10 @@ def get_run_results(
     market_cap_min: str = "",
     market_cap_max: str = "",
     industry_group: str = "",
+    total_2y_growth_min: str = "",
+    total_2y_growth_max: str = "",
+    ttm_vs_end_fy_min: str = "",
+    ttm_vs_end_fy_max: str = "",
     combined_growth_min: str = "",
     combined_growth_max: str = "",
     roce_min: str = "",
@@ -375,6 +379,10 @@ def get_run_results(
         market_cap_min=market_cap_min,
         market_cap_max=market_cap_max,
         industry_group=industry_group,
+        total_2y_growth_min=total_2y_growth_min,
+        total_2y_growth_max=total_2y_growth_max,
+        ttm_vs_end_fy_min=ttm_vs_end_fy_min,
+        ttm_vs_end_fy_max=ttm_vs_end_fy_max,
         combined_growth_min=combined_growth_min,
         combined_growth_max=combined_growth_max,
         roce_min=roce_min,
@@ -403,6 +411,10 @@ def query_run_results(
     market_cap_min: str = "",
     market_cap_max: str = "",
     industry_group: str = "",
+    total_2y_growth_min: str = "",
+    total_2y_growth_max: str = "",
+    ttm_vs_end_fy_min: str = "",
+    ttm_vs_end_fy_max: str = "",
     combined_growth_min: str = "",
     combined_growth_max: str = "",
     roce_min: str = "",
@@ -427,6 +439,10 @@ def query_run_results(
         market_cap_min=market_cap_min,
         market_cap_max=market_cap_max,
         industry_group=industry_group,
+        total_2y_growth_min=total_2y_growth_min,
+        total_2y_growth_max=total_2y_growth_max,
+        ttm_vs_end_fy_min=ttm_vs_end_fy_min,
+        ttm_vs_end_fy_max=ttm_vs_end_fy_max,
         combined_growth_min=combined_growth_min,
         combined_growth_max=combined_growth_max,
         roce_min=roce_min,
@@ -990,6 +1006,10 @@ def _filter_results(
     market_cap_min: str,
     market_cap_max: str,
     industry_group: str,
+    total_2y_growth_min: str,
+    total_2y_growth_max: str,
+    ttm_vs_end_fy_min: str,
+    ttm_vs_end_fy_max: str,
     combined_growth_min: str,
     combined_growth_max: str,
     roce_min: str,
@@ -1008,6 +1028,10 @@ def _filter_results(
 
     market_cap_min_value = _parse_optional_float(market_cap_min)
     market_cap_max_value = _parse_optional_float(market_cap_max)
+    total_2y_growth_min_value = _parse_optional_float(total_2y_growth_min)
+    total_2y_growth_max_value = _parse_optional_float(total_2y_growth_max)
+    ttm_vs_end_fy_min_value = _parse_optional_float(ttm_vs_end_fy_min)
+    ttm_vs_end_fy_max_value = _parse_optional_float(ttm_vs_end_fy_max)
     combined_growth_min_value = _parse_optional_float(combined_growth_min)
     combined_growth_max_value = _parse_optional_float(combined_growth_max)
     roce_min_value = _parse_optional_float(roce_min)
@@ -1033,6 +1057,28 @@ def _filter_results(
             row
             for row in next_rows
             if _row_within_range(row.get("market_cap_cr"), market_cap_min_value, market_cap_max_value)
+        ]
+
+    if total_2y_growth_min_value is not None or total_2y_growth_max_value is not None:
+        next_rows = [
+            row
+            for row in next_rows
+            if _row_within_range(
+                row.get("total_2y_growth_pct"),
+                total_2y_growth_min_value,
+                total_2y_growth_max_value,
+            )
+        ]
+
+    if ttm_vs_end_fy_min_value is not None or ttm_vs_end_fy_max_value is not None:
+        next_rows = [
+            row
+            for row in next_rows
+            if _row_within_range(
+                row.get("ttm_vs_end_fy_pct"),
+                ttm_vs_end_fy_min_value,
+                ttm_vs_end_fy_max_value,
+            )
         ]
 
     if combined_growth_min_value is not None or combined_growth_max_value is not None:

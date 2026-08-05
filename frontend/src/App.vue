@@ -9,6 +9,7 @@ const controller = reactive(useRunsController())
 const route = useRoute()
 const router = useRouter()
 const authUsername = ref('')
+const isAuthenticated = ref(false)
 const sidebarCollapsed = ref(true)
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'app.sidebarCollapsed'
 
@@ -56,6 +57,7 @@ function toggleSidebar(): void {
 async function refreshAuthStatus(): Promise<void> {
   const status = await getAuthStatus()
   authUsername.value = status.username ?? ''
+  isAuthenticated.value = status.authenticated
 }
 
 async function handleLogout(): Promise<void> {
@@ -66,6 +68,10 @@ async function handleLogout(): Promise<void> {
 
 async function ensureAppInitialized(): Promise<void> {
   if (isLoginRoute.value) {
+    controller.stopPolling()
+    return
+  }
+  if (!isAuthenticated.value) {
     controller.stopPolling()
     return
   }

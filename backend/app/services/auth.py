@@ -58,11 +58,23 @@ def verify_credentials(username: str, password: str) -> bool:
 
 
 def is_google_oauth_available() -> bool:
+    redirect_uri = settings.google_redirect_uri.strip()
+    if not redirect_uri:
+        return False
+
+    parsed = url_parse.urlparse(redirect_uri)
+    if not parsed.scheme or not parsed.netloc:
+        return False
+
+    # Google requires HTTPS redirect URIs in production (localhost is the only practical exception).
+    if parsed.hostname not in {"localhost", "127.0.0.1"} and parsed.scheme.lower() != "https":
+        return False
+
     return bool(
         settings.google_oauth_enabled
         and settings.google_client_id.strip()
         and settings.google_client_secret.strip()
-        and settings.google_redirect_uri.strip()
+        and redirect_uri
     )
 
 
@@ -70,6 +82,13 @@ def _is_allowed_redirect(redirect_url: str) -> bool:
     parsed = url_parse.urlparse(redirect_url)
     if not parsed.scheme or not parsed.netloc:
         return False
+
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return False
+
+    if parsed.hostname not in {"localhost", "127.0.0.1"} and parsed.scheme.lower() != "https":
+        return False
+
     origin = f"{parsed.scheme}://{parsed.netloc}".lower()
     allowed = {item.strip().lower() for item in settings.cors_origins}
     return origin in allowed

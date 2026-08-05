@@ -17,9 +17,15 @@ import argparse
 import html
 import re
 
-# Force UTF-8 output on Windows so arrow/rupee characters don't crash
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout.reconfigure(encoding="utf-8")
+# Force UTF-8 output on Windows when stdout is a real text stream.
+_stdout_encoding = getattr(sys.stdout, "encoding", None)
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if (
+    isinstance(_stdout_encoding, str)
+    and _stdout_encoding.lower() != "utf-8"
+    and callable(_stdout_reconfigure)
+):
+    _stdout_reconfigure(encoding="utf-8")
 
 import yfinance as yf
 
