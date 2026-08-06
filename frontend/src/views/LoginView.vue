@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { getAuthStatus, login, startGoogleSignIn } from '../services/auth'
+import { login } from '../services/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -12,10 +12,17 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
-const googleSignInAvailable = ref(false)
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+}
 
 async function submitLogin(): Promise<void> {
   errorMessage.value = ''
+  if (!isValidEmail(username.value)) {
+    errorMessage.value = 'Please enter a valid email address'
+    return
+  }
   loading.value = true
   try {
     await login({
@@ -31,18 +38,6 @@ async function submitLogin(): Promise<void> {
   }
 }
 
-function signInWithGoogle(): void {
-  if (!googleSignInAvailable.value) {
-    return
-  }
-  const redirectTo = String(route.query.redirect ?? '/dashboard')
-  startGoogleSignIn(redirectTo)
-}
-
-onMounted(async () => {
-  const authStatus = await getAuthStatus()
-  googleSignInAvailable.value = authStatus.google_oauth_available
-})
 </script>
 
 <template>
@@ -105,9 +100,10 @@ onMounted(async () => {
 
                 <v-text-field
                   v-model="username"
-                  label="Username"
-                  prepend-inner-icon="mdi-account-outline"
-                  autocomplete="username"
+                  label="Email"
+                  type="email"
+                  prepend-inner-icon="mdi-email-outline"
+                  autocomplete="email"
                   @keyup.enter="submitLogin"
                 />
 
@@ -125,23 +121,15 @@ onMounted(async () => {
                   color="primary"
                   size="large"
                   :loading="loading"
-                  :disabled="!username.trim() || !password"
+                  :disabled="!username.trim() || !password || !isValidEmail(username)"
                   @click="submitLogin"
                 >
                   Login
                 </v-btn>
 
-                <v-btn
-                  v-if="googleSignInAvailable"
-                  block
-                  variant="outlined"
-                  color="secondary"
-                  prepend-icon="mdi-google"
-                  class="mt-3"
-                  @click="signInWithGoogle"
-                >
-                  Sign In With Google
-                </v-btn>
+                <div class="text-body-2 text-medium-emphasis text-center mt-3">
+                  <router-link class="signup-link" to="/forgot-password">Forgot password?</router-link>
+                </div>
 
                 <div class="text-body-2 text-medium-emphasis text-center mt-4">
                   First time user?

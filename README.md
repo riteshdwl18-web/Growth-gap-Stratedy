@@ -85,19 +85,44 @@ Backend variables (optional):
 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/growth_gap_strategy
 CELERY_BROKER_URL=redis://127.0.0.1:6379/0
 CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
-
-# Google OAuth (required for Sign In with Google)
-GOOGLE_OAUTH_ENABLED=true
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=http://127.0.0.1:8000/api/auth/google/callback
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+FRONTEND_BASE_URL=http://127.0.0.1:5173
+PASSWORD_RESET_TTL_MINUTES=20
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=587
+SMTP_USERNAME=<your-brevo-smtp-login>
+SMTP_PASSWORD=<your-brevo-smtp-key>
+SMTP_FROM_EMAIL=<verified-sender@yourdomain.com>
+SMTP_FROM_NAME=Growth Gap Strategy
+SMTP_USE_TLS=true
 ```
 
-For Google Cloud Console, configure the OAuth client with these local values:
+### Forgot Password (Brevo Free Tier)
 
-- Authorized JavaScript origins: `http://127.0.0.1:5173` and `http://localhost:5173`
-- Authorized redirect URIs: `http://127.0.0.1:8000/api/auth/google/callback`
+This project now supports full email-based password recovery:
+
+- Request reset: `POST /api/auth/forgot-password`
+- Complete reset: `POST /api/auth/reset-password`
+
+Frontend routes:
+
+- `/forgot-password`
+- `/reset-password?token=<token>`
+
+Brevo setup steps:
+
+1. Create a Brevo account and open SMTP settings.
+2. Add and verify your sender email/domain in Brevo.
+3. Put SMTP values in `backend/.env` using the variables above.
+4. Restart backend.
+5. Use Forgot Password from login page and verify email delivery.
+
+Security behavior:
+
+- Forgot password response is generic and does not reveal whether account exists.
+- Reset token is single-use and expires after `PASSWORD_RESET_TTL_MINUTES`.
+- Raw reset token is never stored in DB; only SHA-256 hash is stored.
+- Existing sessions are invalidated after password reset.
 
 If you see `connection refused` for `127.0.0.1:5432`, PostgreSQL is not running yet or the `DATABASE_URL` does not match the actual host, port, database, username, or password.
 
@@ -148,9 +173,38 @@ Validation behavior:
 4. Add auth and role-based access if multi-user.
 5. Add Google Sheets export endpoint and settings page.
 
-## Docker Deployment (Single VM)
+## Docker Quick Start (Local PostgreSQL Only)
 
-This repo includes a deployment compose stack in `compose.deploy.yaml` for:
+Use this when you only want PostgreSQL in Docker and run backend/frontend manually on host.
+
+Start PostgreSQL:
+
+```bash
+docker compose up -d postgres
+```
+
+Check health:
+
+```bash
+docker compose ps
+docker compose logs -f postgres
+```
+
+Stop PostgreSQL:
+
+```bash
+docker compose stop postgres
+```
+
+Remove PostgreSQL container and volume (full reset):
+
+```bash
+docker compose down -v
+```
+
+## Docker Deployment (Single VM, Full Stack)
+
+This repo includes a full-stack deployment compose file at `compose.deploy.yaml`:
 
 - `postgres` (persistent volume)
 - `redis`
@@ -168,23 +222,34 @@ Edit `backend/.env.docker` and set:
 
 - `CORS_ORIGINS` to your real domain or public IP origin
 - `SESSION_COOKIE_SECURE=true` in production
-- Google OAuth values if you use Google sign-in:
-  - `GOOGLE_OAUTH_ENABLED=true`
-  - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
-  - `GOOGLE_REDIRECT_URI=https://<your-domain>/api/auth/google/callback`
+- Forgot password email settings if you use reset links:
+  - `FRONTEND_BASE_URL`
+  - `PASSWORD_RESET_TTL_MINUTES`
+  - `SMTP_HOST`
+  - `SMTP_PORT`
+  - `SMTP_USERNAME`
+  - `SMTP_PASSWORD`
+  - `SMTP_FROM_EMAIL`
+  - `SMTP_FROM_NAME`
+  - `SMTP_USE_TLS`
 
-Google OAuth production checklist:
+Optional: set frontend API URL at runtime build time:
 
-- Use HTTPS for your public app URL (Google does not allow non-HTTPS callback URIs for public domains).
-- In Google Cloud Console, add:
-  - Authorized JavaScript origins: `https://<your-domain>`
-  - Authorized redirect URIs: `https://<your-domain>/api/auth/google/callback`
-- Ensure `CORS_ORIGINS` contains the same frontend origin used above.
+```bash
+export VITE_API_BASE_URL=http://<your-server-ip>
+```
 
 ### 2) Build and run
 
 ```bash
 docker compose -f compose.deploy.yaml up -d --build
+```
+
+Rebuild only changed services:
+
+```bash
+docker compose -f compose.deploy.yaml up -d --build backend worker
+docker compose -f compose.deploy.yaml up -d --build frontend
 ```
 
 ### 3) Check status
@@ -193,6 +258,35 @@ docker compose -f compose.deploy.yaml up -d --build
 docker compose -f compose.deploy.yaml ps
 docker compose -f compose.deploy.yaml logs -f backend
 docker compose -f compose.deploy.yaml logs -f worker
+docker compose -f compose.deploy.yaml logs -f frontend
+docker compose -f compose.deploy.yaml logs -f postgres
+docker compose -f compose.deploy.yaml logs -f redis
+```
+
+Restart a single service:
+
+```bash
+docker compose -f compose.deploy.yaml restart backend
+docker compose -f compose.deploy.yaml restart worker
+docker compose -f compose.deploy.yaml restart frontend
+```
+
+Stop stack without deleting volumes:
+
+```bash
+docker compose -f compose.deploy.yaml stop
+```
+
+Stop and remove stack:
+
+```bash
+docker compose -f compose.deploy.yaml down
+```
+
+Full reset (delete Postgres + runtime volumes):
+
+```bash
+docker compose -f compose.deploy.yaml down -v
 ```
 
 ### 4) Endpoints
@@ -200,4 +294,31 @@ docker compose -f compose.deploy.yaml logs -f worker
 - Frontend: `http://<your-server-ip>/`
 - Backend health (proxied): `http://<your-server-ip>/health`
 
+Useful backend endpoints after deployment:
+
+- `http://<your-server-ip>/docs`
+- `http://<your-server-ip>/api/auth/me`
+
 The compose stack binds Postgres, Redis, and backend to localhost only on the VM (`127.0.0.1`), and only exposes frontend on port `80`.
+
+## Common Docker Troubleshooting
+
+If frontend opens but API fails:
+
+```bash
+docker compose -f compose.deploy.yaml logs -f backend
+docker compose -f compose.deploy.yaml logs -f frontend
+```
+
+If backend cannot connect to Postgres:
+
+```bash
+docker compose -f compose.deploy.yaml logs -f postgres
+docker compose -f compose.deploy.yaml exec postgres pg_isready -U postgres -d growth_gap_strategy
+```
+
+If forgot password returns success but no email arrives:
+
+```bash
+docker compose -f compose.deploy.yaml logs -f backend | grep -i "smtp\|password reset\|auth"
+```

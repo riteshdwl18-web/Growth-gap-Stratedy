@@ -2,7 +2,6 @@ export type AuthStatusResponse = {
   authenticated: boolean
   username: string | null
   signup_required: boolean
-  google_oauth_available: boolean
 }
 
 export type LoginPayload = {
@@ -13,6 +12,24 @@ export type LoginPayload = {
 export type SignupPayload = {
   username: string
   password: string
+}
+
+export type ChangePasswordPayload = {
+  current_password: string
+  new_password: string
+}
+
+export type MessageResponse = {
+  message: string
+}
+
+export type ForgotPasswordPayload = {
+  email: string
+}
+
+export type ResetPasswordPayload = {
+  token: string
+  new_password: string
 }
 
 export const API_BASE =
@@ -42,11 +59,11 @@ export async function getAuthStatus(): Promise<AuthStatusResponse> {
       credentials: 'include',
     })
     if (!response.ok) {
-      return { authenticated: false, username: null, signup_required: false, google_oauth_available: false }
+      return { authenticated: false, username: null, signup_required: false }
     }
     return (await response.json()) as AuthStatusResponse
   } catch {
-    return { authenticated: false, username: null, signup_required: false, google_oauth_available: false }
+    return { authenticated: false, username: null, signup_required: false }
   }
 }
 
@@ -89,8 +106,51 @@ export async function signup(payload: SignupPayload): Promise<AuthStatusResponse
   return (await response.json()) as AuthStatusResponse
 }
 
-export function startGoogleSignIn(redirectPath = '/dashboard'): void {
-  const redirectUrl = new URL(redirectPath, window.location.origin).toString()
-  const oauthUrl = `${API_BASE}/api/auth/google/start?redirect_uri=${encodeURIComponent(redirectUrl)}`
-  window.location.assign(oauthUrl)
+export async function changePassword(payload: ChangePasswordPayload): Promise<MessageResponse> {
+  const response = await fetch(`${API_BASE}/api/auth/change-password`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { detail?: string } | null
+    throw new Error(payload?.detail || 'Password change failed')
+  }
+
+  return (await response.json()) as MessageResponse
 }
+
+export async function forgotPassword(payload: ForgotPasswordPayload): Promise<MessageResponse> {
+  const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { detail?: string } | null
+    throw new Error(payload?.detail || 'Forgot password request failed')
+  }
+
+  return (await response.json()) as MessageResponse
+}
+
+export async function resetPassword(payload: ResetPasswordPayload): Promise<MessageResponse> {
+  const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { detail?: string } | null
+    throw new Error(payload?.detail || 'Password reset failed')
+  }
+
+  return (await response.json()) as MessageResponse
+}
+

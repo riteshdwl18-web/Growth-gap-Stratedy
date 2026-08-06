@@ -1,10 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import DashboardView from '../views/DashboardView.vue'
+import ChangePasswordView from '../views/ChangePasswordView.vue'
 import LoginView from '../views/LoginView.vue'
+import ForgotPasswordView from '../views/ForgotPasswordView.vue'
+import ResetPasswordView from '../views/ResetPasswordView.vue'
 import RunDetailsView from '../views/RunDetailsView.vue'
-import RunsView from '../views/RunsView.vue'
+import ScreenerView from '../views/ScreenerView.vue'
 import SignupView from '../views/SignupView.vue'
+import TradingJournalView from '../views/TradingJournalView.vue'
 import { getAuthStatus } from '../services/auth'
 
 const router = createRouter({
@@ -27,21 +31,50 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: ForgotPasswordView,
+      meta: { public: true },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: ResetPasswordView,
+      meta: { public: true },
+    },
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: DashboardView,
       meta: { requiresAuth: true },
     },
     {
+      path: '/screener',
+      name: 'screener',
+      component: ScreenerView,
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/runs',
       name: 'runs',
-      component: RunsView,
-      meta: { requiresAuth: true },
+      redirect: '/screener',
     },
     {
       path: '/runs/:runId',
       name: 'run-details',
       component: RunDetailsView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/journal',
+      name: 'trading-journal',
+      component: TradingJournalView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/account/security',
+      name: 'account-security',
+      component: ChangePasswordView,
       meta: { requiresAuth: true },
     },
   ],

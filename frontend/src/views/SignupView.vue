@@ -18,8 +18,16 @@ const passwordMismatch = computed(
   () => confirmPassword.value.length > 0 && password.value !== confirmPassword.value,
 )
 
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+}
+
 async function submitSignup(): Promise<void> {
   errorMessage.value = ''
+  if (!isValidEmail(username.value)) {
+    errorMessage.value = 'Please enter a valid email address'
+    return
+  }
   if (passwordMismatch.value) {
     errorMessage.value = 'Passwords do not match'
     return
@@ -83,9 +91,10 @@ async function submitSignup(): Promise<void> {
 
                 <v-text-field
                   v-model="username"
-                  label="Username"
-                  prepend-inner-icon="mdi-account-outline"
-                  autocomplete="username"
+                  label="Email"
+                  type="email"
+                  prepend-inner-icon="mdi-email-outline"
+                  autocomplete="email"
                   @keyup.enter="submitSignup"
                 />
 
@@ -114,7 +123,7 @@ async function submitSignup(): Promise<void> {
                   color="primary"
                   size="large"
                   :loading="loading"
-                  :disabled="!username.trim() || !password || !confirmPassword || passwordMismatch"
+                  :disabled="!username.trim() || !password || !confirmPassword || passwordMismatch || !isValidEmail(username)"
                   @click="submitSignup"
                 >
                   Create Account

@@ -74,14 +74,15 @@ class Settings(BaseModel):
     session_cookie_secure: bool = _env_bool("SESSION_COOKIE_SECURE", False)
     session_cookie_samesite: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
     session_cookie_domain: str = os.getenv("SESSION_COOKIE_DOMAIN", "").strip()
-    google_oauth_enabled: bool = _env_bool("GOOGLE_OAUTH_ENABLED", False)
-    google_client_id: str = os.getenv("GOOGLE_CLIENT_ID", "")
-    google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
-    google_redirect_uri: str = os.getenv(
-        "GOOGLE_REDIRECT_URI",
-        "http://localhost:8000/api/auth/google/callback",
-    )
-    oauth_state_ttl_minutes: int = _env_int("OAUTH_STATE_TTL_MINUTES", 10)
+    frontend_base_url: str = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").strip()
+    password_reset_ttl_minutes: int = _env_int("PASSWORD_RESET_TTL_MINUTES", 20)
+    smtp_host: str = os.getenv("SMTP_HOST", "").strip()
+    smtp_port: int = _env_int("SMTP_PORT", 587)
+    smtp_username: str = os.getenv("SMTP_USERNAME", "").strip()
+    smtp_password: str = os.getenv("SMTP_PASSWORD", "").strip()
+    smtp_from_email: str = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    smtp_from_name: str = os.getenv("SMTP_FROM_NAME", "Growth Gap Strategy").strip()
+    smtp_use_tls: bool = _env_bool("SMTP_USE_TLS", True)
     scraper_min_delay_seconds: float = _env_float("SCRAPER_MIN_DELAY_SECONDS", 1.2)
     scraper_max_delay_seconds: float = _env_float("SCRAPER_MAX_DELAY_SECONDS", 2.2)
     scraper_retry_max_attempts: int = _env_int("SCRAPER_RETRY_MAX_ATTEMPTS", 3)

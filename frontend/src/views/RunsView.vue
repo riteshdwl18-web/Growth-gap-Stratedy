@@ -351,7 +351,7 @@ function retryableCount(run: { skipped_count?: number }): number {
               </div>
             </template>
 
-            <template #no-data>No runs yet. Start a run from Dashboard.</template>
+            <template #no-data>No runs yet. Start a run from Screener.</template>
           </v-data-table>
 
           <div class="d-flex justify-space-between align-center mt-3 flex-wrap ga-3">

@@ -1,15 +1,19 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import csv
 import io
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.models import (
     AuthStatusResponse,
+    ChangePasswordRequest,
+    ForgotPasswordRequest,
     HealthResponse,
+    JournalSortBy,
+    LivePriceQuoteResponse,
     LoginRequest,
     ResultFilterQuery,
     RunCreateRequest,
@@ -24,20 +28,28 @@ from app.models import (
     UploadRunCreateRequest,
     UploadValidationResponse,
     SignupRequest,
+    TradingJournalEntryListResponse,
+    TradingJournalEntryResponse,
+    TradingJournalEntryUpsertRequest,
+    TradingJournalLotResponse,
     UserResultFilterListResponse,
+    MessageResponse,
+    ResetPasswordRequest,
     UserResultFilterResponse,
     UserResultFilterUpsertRequest,
 )
 from app.services.auth import (
     SESSION_COOKIE_NAME,
-    begin_google_oauth,
-    complete_google_oauth,
+    change_password,
     create_user,
     create_session,
     get_session_username,
-    is_google_oauth_available,
     has_any_user,
     invalidate_session,
+    is_valid_email,
+    normalize_email,
+    request_password_reset,
+    reset_password_with_token,
     verify_credentials,
 )
 from app.services.screener import (
@@ -48,6 +60,8 @@ from app.services.screener import (
     generate_run_csv,
     get_run,
     get_run_results,
+    get_live_price_quote,
+    get_live_price_quotes,
     list_run_industry_groups,
     list_runs,
     query_run_results,
@@ -61,16 +75,40 @@ from app.services.uploads import (
 )
 from app.storage import (
     backfill_legacy_ownership,
+    create_trading_journal_entry,
     count_legacy_ownerless_records,
+    delete_trading_journal_entry,
+    list_trading_journal_entries,
     delete_user_result_filter,
     list_user_result_filters,
     save_user_result_filter,
+    update_trading_journal_entry,
 )
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
 MAX_USER_RESULT_FILTERS = 5
+
+
+def _to_local_datetime(value: object) -> datetime:
+    text = str(value or "").strip()
+    if not text:
+        return datetime.now().astimezone()
+
+    # Accept ISO timestamps that end with UTC "Z".
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return datetime.now().astimezone()
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone()
 
 
 def _cookie_kwargs() -> dict[str, object]:
@@ -131,9 +169,11 @@ def login(payload: LoginRequest, response: Response) -> AuthStatusResponse:
     if not has_any_user():
         raise HTTPException(status_code=409, detail="No account found. Please sign up first.")
 
-    username = payload.username.strip()
+    username = normalize_email(payload.username)
+    if not is_valid_email(username):
+        raise HTTPException(status_code=400, detail="Email is invalid")
     if not verify_credentials(username, payload.password):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_session(username)
     response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
@@ -141,22 +181,21 @@ def login(payload: LoginRequest, response: Response) -> AuthStatusResponse:
         authenticated=True,
         username=username,
         signup_required=False,
-        google_oauth_available=is_google_oauth_available(),
     )
 
 
 @app.post("/api/auth/signup", response_model=AuthStatusResponse)
 def signup(payload: SignupRequest, response: Response) -> AuthStatusResponse:
-    username = payload.username.strip()
+    username = normalize_email(payload.username)
     password = payload.password
-    if len(username) < 3:
-        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if not is_valid_email(username):
+        raise HTTPException(status_code=400, detail="Email is invalid")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
     created = create_user(username, password)
     if not created:
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="Email already exists")
 
     token = create_session(username)
     response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
@@ -164,37 +203,7 @@ def signup(payload: SignupRequest, response: Response) -> AuthStatusResponse:
         authenticated=True,
         username=username,
         signup_required=False,
-        google_oauth_available=is_google_oauth_available(),
     )
-
-
-@app.get("/api/auth/google/start")
-def google_oauth_start(redirect_uri: str = Query(default="http://localhost:5173/dashboard")) -> RedirectResponse:
-    if not is_google_oauth_available():
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
-
-    try:
-        auth_url = begin_google_oauth(redirect_uri)
-    except RuntimeError as err:
-        raise HTTPException(status_code=400, detail=str(err)) from err
-
-    return RedirectResponse(url=auth_url)
-
-
-@app.get("/api/auth/google/callback")
-def google_oauth_callback(code: str = Query(default=""), state: str = Query(default="")) -> RedirectResponse:
-    if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing OAuth callback parameters")
-
-    try:
-        username, frontend_redirect = complete_google_oauth(code=code, state=state)
-    except RuntimeError as err:
-        raise HTTPException(status_code=400, detail=str(err)) from err
-
-    token = create_session(username)
-    response = RedirectResponse(url=frontend_redirect)
-    response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
-    return response
 
 
 @app.post("/api/auth/logout", response_model=AuthStatusResponse)
@@ -214,7 +223,6 @@ def logout(request: Request, response: Response) -> AuthStatusResponse:
         authenticated=False,
         username=None,
         signup_required=not has_any_user(),
-        google_oauth_available=is_google_oauth_available(),
     )
 
 
@@ -227,14 +235,51 @@ def me(request: Request) -> AuthStatusResponse:
             authenticated=False,
             username=None,
             signup_required=not has_any_user(),
-            google_oauth_available=is_google_oauth_available(),
         )
     return AuthStatusResponse(
         authenticated=True,
         username=username,
         signup_required=False,
-        google_oauth_available=is_google_oauth_available(),
     )
+
+
+@app.post("/api/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(payload: ForgotPasswordRequest) -> MessageResponse:
+    # Do not leak account existence.
+    if is_valid_email(payload.email):
+        request_password_reset(payload.email)
+    return MessageResponse(message="If the account exists, a reset link has been sent.")
+
+
+@app.post("/api/auth/reset-password", response_model=MessageResponse)
+def reset_password(payload: ResetPasswordRequest) -> MessageResponse:
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    updated = reset_password_with_token(payload.token, payload.new_password)
+    if not updated:
+        raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
+    return MessageResponse(message="Password reset successful. Please login again.")
+
+
+@app.post("/api/auth/change-password", response_model=MessageResponse)
+def change_password_endpoint(payload: ChangePasswordRequest, request: Request) -> MessageResponse:
+    token = request.cookies.get(SESSION_COOKIE_NAME, "")
+    username = get_session_username(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+
+    updated = change_password(username, payload.current_password, payload.new_password)
+    if not updated:
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    return MessageResponse(message="Password updated successfully")
 
 
 @app.post("/api/runs", response_model=RunSummary)
@@ -456,6 +501,17 @@ def fetch_run_results(
     )
 
 
+@app.get("/api/market/quote", response_model=LivePriceQuoteResponse)
+def fetch_market_quote(
+    request: Request,
+    symbol: str = Query(..., min_length=1, max_length=40),
+    refresh: bool = Query(default=True),
+) -> LivePriceQuoteResponse:
+    _auth_username(request)
+    quote = get_live_price_quote(symbol=symbol, force_refresh=refresh)
+    return LivePriceQuoteResponse(**quote)
+
+
 @app.get("/api/runs/{run_id}/industry-groups", response_model=list[str])
 def fetch_run_industry_groups(run_id: str, request: Request) -> list[str]:
     username = _auth_username(request)
@@ -564,7 +620,7 @@ def fetch_upload_status(upload_id: str, request: Request) -> UploadStatusRespons
     return UploadStatusResponse(
         upload_id=str(payload.get("upload_id", upload_id)),
         filename=str(payload.get("filename", "upload.csv")),
-        created_at=datetime.fromisoformat(str(payload.get("created_at", datetime.utcnow().isoformat()))),
+        created_at=_to_local_datetime(payload.get("created_at", datetime.utcnow().isoformat())),
         valid=bool(payload.get("valid", False)),
         total_rows=int(payload.get("total_rows", 0)),
         accepted_rows=int(payload.get("accepted_rows", 0)),
@@ -611,9 +667,103 @@ def _to_user_result_filter_response(item: dict) -> UserResultFilterResponse:
         name=str(item.get("name", "")),
         query=ResultFilterQuery(**dict(item.get("query", {}))),
         is_default=bool(item.get("is_default", False)),
-        created_at=datetime.fromisoformat(str(item.get("created_at", datetime.utcnow().isoformat()))),
-        updated_at=datetime.fromisoformat(str(item.get("updated_at", datetime.utcnow().isoformat()))),
+        created_at=_to_local_datetime(item.get("created_at", datetime.utcnow().isoformat())),
+        updated_at=_to_local_datetime(item.get("updated_at", datetime.utcnow().isoformat())),
     )
+
+
+def _to_trading_journal_response(item: dict) -> TradingJournalEntryResponse:
+    return TradingJournalEntryResponse(
+        entry_id=str(item.get("entry_id", "")),
+        trade_date=str(item.get("trade_date", "")),
+        session=str(item.get("session", "Open")),
+        script=str(item.get("script", "")),
+        trade_strategy=str(item.get("trade_strategy", "")),
+        time_period=str(item.get("time_period", "ShortTerm")) or "ShortTerm",
+        side=str(item.get("side", "Buy")),
+        quantity=int(item.get("quantity", 0)),
+        entry_price=float(item.get("entry_price", 0)),
+        entry_value=float(item.get("entry_value", 0)),
+        exit_quantity=int(item.get("exit_quantity", 0)),
+        squareoff_date=str(item.get("squareoff_date", "")),
+        exit_price=float(item.get("exit_price", 0)),
+        pnl=float(item.get("pnl", 0)),
+        gain_loss_pct=float(item.get("gain_loss_pct", 0)),
+        sl=float(item.get("sl", 0)),
+        sl_pct=float(item.get("sl_pct", 0)),
+        tp=float(item.get("tp", 0)),
+        origination_logic=str(item.get("origination_logic", "")),
+        comment=str(item.get("comment", "")),
+        karma=int(item.get("karma", 0)),
+        lots=[TradingJournalLotResponse(**dict(lot)) for lot in item.get("lots", []) if isinstance(lot, dict)],
+        open_quantity=int(item.get("open_quantity", 0)),
+        realized_pnl=float(item.get("realized_pnl", 0)),
+        unrealized_pnl=float(item.get("unrealized_pnl", 0)),
+        current_price=(float(item.get("current_price")) if item.get("current_price") is not None else None),
+        live_price_as_of=(str(item.get("live_price_as_of", "")).strip() or None),
+        created_at=_to_local_datetime(item.get("created_at", datetime.utcnow().isoformat())),
+        updated_at=_to_local_datetime(item.get("updated_at", datetime.utcnow().isoformat())),
+    )
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _round2(value: float) -> float:
+    return round(value + 1e-9, 2)
+
+
+def _is_closed_trade(item: dict) -> bool:
+    session = str(item.get("session", "")).strip().lower()
+    if session == "close":
+        return True
+
+    squareoff_date = str(item.get("squareoff_date", "")).strip()
+    if squareoff_date and _to_float(item.get("exit_quantity", 0.0), 0.0) >= _to_float(item.get("quantity", 0.0), 0.0):
+        return True
+
+    return _to_float(item.get("exit_quantity", 0.0), 0.0) > 0 and _to_float(item.get("exit_quantity", 0.0), 0.0) >= _to_float(item.get("quantity", 0.0), 0.0)
+
+
+def _enrich_open_trade_calculations(item: dict, current_price: float | None) -> None:
+    if current_price is None or _is_closed_trade(item):
+        return
+
+    quantity = max(0.0, _to_float(item.get("quantity", 0.0), 0.0))
+    exit_quantity = max(0.0, _to_float(item.get("exit_quantity", 0.0), 0.0))
+    entry_price = max(0.0, _to_float(item.get("entry_price", 0.0), 0.0))
+    if quantity <= 0 or entry_price <= 0 or current_price <= 0:
+        return
+
+    open_quantity = max(quantity - min(exit_quantity, quantity), 0.0)
+    side = str(item.get("side", "Buy")).strip().lower()
+    realized_pnl = 0.0
+    if exit_quantity > 0:
+        realized_qty = min(exit_quantity, quantity)
+        realized_price = max(0.0, _to_float(item.get("exit_price", 0.0), 0.0))
+        if realized_price > 0:
+            realized_per_unit = (entry_price - realized_price) if side == "sell" else (realized_price - entry_price)
+            realized_pnl = _round2(realized_per_unit * realized_qty)
+
+    unrealized_per_unit = (entry_price - current_price) if side == "sell" else (current_price - entry_price)
+    unrealized_pnl = _round2(unrealized_per_unit * open_quantity) if open_quantity > 0 else 0.0
+    pnl = _round2(realized_pnl + unrealized_pnl)
+
+    entry_value = _to_float(item.get("entry_value", 0.0), 0.0)
+    if entry_value <= 0:
+        entry_value = _round2(quantity * entry_price)
+        item["entry_value"] = entry_value
+
+    gain_loss_pct = _round2((pnl / entry_value) * 100) if entry_value > 0 else 0.0
+    item["pnl"] = pnl
+    item["gain_loss_pct"] = gain_loss_pct
+    item["open_quantity"] = int(open_quantity)
+    item["realized_pnl"] = realized_pnl
+    item["unrealized_pnl"] = unrealized_pnl
 
 
 @app.get("/api/user/result-filters", response_model=UserResultFilterListResponse)
@@ -687,6 +837,170 @@ def remove_user_result_filter(filter_id: str, request: Request) -> dict[str, boo
     if not deleted:
         raise HTTPException(status_code=404, detail="Favorite filter not found")
     return {"deleted": True}
+
+
+@app.get("/api/journal/entries", response_model=TradingJournalEntryListResponse)
+def fetch_trading_journal_entries(
+    request: Request,
+    search: str = Query(default="", max_length=200),
+    session: str = Query(default="all", max_length=10),
+    trade_strategy: str = Query(default="all", max_length=80),
+    time_period: str = Query(default="all", max_length=20),
+    sort_by: JournalSortBy = Query(default="trade_date"),
+    sort_order: RunSortOrder = Query(default="desc"),
+    include_live_price: bool = Query(default=False),
+    refresh_live_price: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+) -> TradingJournalEntryListResponse:
+    username = _auth_username(request)
+    items, total = list_trading_journal_entries(
+        username=username,
+        search=search,
+        session=session,
+        trade_strategy=trade_strategy,
+        time_period=time_period,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        page_size=page_size,
+    )
+
+    if include_live_price and items:
+        symbols = [
+            str(item.get("script", "")).strip().upper()
+            for item in items
+            if str(item.get("script", "")).strip() and not _is_closed_trade(item)
+        ]
+        quote_map = get_live_price_quotes(symbols=symbols, force_refresh=refresh_live_price)
+        enriched_items: list[dict] = []
+        for item in items:
+            next_item = dict(item)
+            symbol = str(item.get("script", "")).strip().upper()
+            quote = quote_map.get(symbol, {})
+            next_item["current_price"] = quote.get("current_price") if not _is_closed_trade(next_item) else None
+            next_item["live_price_as_of"] = quote.get("quote_as_of") if not _is_closed_trade(next_item) else None
+            _enrich_open_trade_calculations(next_item, next_item.get("current_price"))
+            enriched_items.append(next_item)
+        items = enriched_items
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    return TradingJournalEntryListResponse(
+        items=[_to_trading_journal_response(item) for item in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
+@app.post("/api/journal/entries", response_model=TradingJournalEntryResponse)
+def add_trading_journal_entry(
+    request: Request,
+    payload: TradingJournalEntryUpsertRequest,
+) -> TradingJournalEntryResponse:
+    username = _auth_username(request)
+    saved = create_trading_journal_entry(username=username, payload=payload.model_dump())
+    return _to_trading_journal_response(saved)
+
+
+@app.put("/api/journal/entries/{entry_id}", response_model=TradingJournalEntryResponse)
+def edit_trading_journal_entry(
+    entry_id: str,
+    request: Request,
+    payload: TradingJournalEntryUpsertRequest,
+) -> TradingJournalEntryResponse:
+    username = _auth_username(request)
+    saved = update_trading_journal_entry(username=username, entry_id=entry_id, payload=payload.model_dump())
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    return _to_trading_journal_response(saved)
+
+
+@app.delete("/api/journal/entries/{entry_id}")
+def remove_trading_journal_entry(entry_id: str, request: Request) -> dict[str, bool]:
+    username = _auth_username(request)
+    deleted = delete_trading_journal_entry(username=username, entry_id=entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    return {"deleted": True}
+
+
+@app.get("/api/journal/entries/export.csv")
+def export_trading_journal_entries_csv(
+    request: Request,
+    search: str = Query(default="", max_length=200),
+    session: str = Query(default="all", max_length=10),
+    trade_strategy: str = Query(default="all", max_length=80),
+    time_period: str = Query(default="all", max_length=20),
+    sort_by: JournalSortBy = Query(default="trade_date"),
+    sort_order: RunSortOrder = Query(default="desc"),
+) -> StreamingResponse:
+    username = _auth_username(request)
+    rows, _ = list_trading_journal_entries(
+        username=username,
+        search=search,
+        session=session,
+        trade_strategy=trade_strategy,
+        time_period=time_period,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=1,
+        page_size=5000,
+    )
+
+    csv_buffer = io.StringIO()
+    fieldnames = [
+        "Date",
+        "Open/Close",
+        "Script",
+        "Trade Strategy",
+        "Time Period",
+        "Buy/Sell",
+        "Quantity",
+        "Entry Price",
+        "Entry Value",
+        "SquareOff Date",
+        "Exit Price",
+        "Profit/Loss",
+        "% Gain/Loss",
+        "SL",
+        "SL %",
+        "TP",
+        "Origination Logic",
+        "Comment",
+        "Karma",
+    ]
+    writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "Date": row.get("trade_date", ""),
+                "Open/Close": row.get("session", ""),
+                "Script": row.get("script", ""),
+                "Trade Strategy": row.get("trade_strategy", ""),
+                "Time Period": row.get("time_period", ""),
+                "Buy/Sell": row.get("side", ""),
+                "Quantity": row.get("quantity", 0),
+                "Entry Price": row.get("entry_price", 0),
+                "Entry Value": row.get("entry_value", 0),
+                "SquareOff Date": row.get("squareoff_date", ""),
+                "Exit Price": row.get("exit_price", 0),
+                "Profit/Loss": row.get("pnl", 0),
+                "% Gain/Loss": row.get("gain_loss_pct", 0),
+                "SL": row.get("sl", 0),
+                "SL %": row.get("sl_pct", 0),
+                "TP": row.get("tp", 0),
+                "Origination Logic": row.get("origination_logic", ""),
+                "Comment": row.get("comment", ""),
+                "Karma": row.get("karma", 0),
+            }
+        )
+
+    output = io.BytesIO(csv_buffer.getvalue().encode("utf-8"))
+    headers = {"Content-Disposition": "attachment; filename=trading_journal_entries.csv"}
+    return StreamingResponse(output, media_type="text/csv", headers=headers)
 
 
 @app.post("/api/admin/backfill-legacy-ownership")

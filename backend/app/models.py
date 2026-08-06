@@ -118,11 +118,28 @@ class SignupRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 class AuthStatusResponse(BaseModel):
     authenticated: bool
     username: str | None = None
     signup_required: bool = False
-    google_oauth_available: bool = False
+
+
+class MessageResponse(BaseModel):
+    message: str
 
 
 class UploadValidationResponse(BaseModel):
@@ -189,3 +206,92 @@ class UserResultFilterResponse(BaseModel):
 class UserResultFilterListResponse(BaseModel):
     items: list[UserResultFilterResponse]
     max_items: int = 5
+
+
+class LivePriceQuoteResponse(BaseModel):
+    symbol: str
+    current_price: float | None = None
+    quote_as_of: str | None = None
+    source: str | None = None
+
+
+JournalSessionType = Literal["Open", "Close"]
+JournalSideType = Literal["Buy", "Sell"]
+JournalTimePeriodType = Literal["ShortTerm", "LongTerm"]
+JournalSortBy = Literal[
+    "trade_date",
+    "squareoff_date",
+    "script",
+    "trade_strategy",
+    "time_period",
+    "side",
+    "quantity",
+    "entry_price",
+    "exit_price",
+    "pnl",
+    "gain_loss_pct",
+    "karma",
+    "updated_at",
+]
+
+
+class TradingJournalEntryBase(BaseModel):
+    trade_date: str = Field(min_length=1, max_length=20)
+    session: JournalSessionType
+    script: str = Field(min_length=1, max_length=40)
+    trade_strategy: str = Field(default="", max_length=80)
+    time_period: JournalTimePeriodType = Field(default="ShortTerm")
+    side: JournalSideType
+    quantity: int = Field(ge=1)
+    entry_price: float = Field(ge=0)
+    entry_value: float = Field(ge=0)
+    exit_quantity: int = Field(default=0, ge=0)
+    squareoff_date: str = Field(default="", max_length=20)
+    exit_price: float = Field(default=0, ge=0)
+    pnl: float = Field(default=0)
+    gain_loss_pct: float = Field(default=0)
+    sl: float = Field(default=0, ge=0)
+    sl_pct: float = Field(default=0)
+    tp: float = Field(default=0, ge=0)
+    origination_logic: str = Field(default="", max_length=500)
+    comment: str = Field(default="", max_length=1000)
+    karma: int = Field(default=0, ge=0, le=10)
+
+
+class TradingJournalLotBase(BaseModel):
+    lot_date: str = Field(min_length=1, max_length=20)
+    quantity: int = Field(ge=1)
+    price: float = Field(ge=0)
+    note: str = Field(default="", max_length=200)
+
+
+class TradingJournalLotResponse(TradingJournalLotBase):
+    lot_id: int
+
+
+class TradingJournalLotUpsertRequest(TradingJournalLotBase):
+    pass
+
+
+class TradingJournalEntryUpsertRequest(TradingJournalEntryBase):
+    lots: list[TradingJournalLotUpsertRequest] = Field(default_factory=list)
+
+
+class TradingJournalEntryResponse(TradingJournalEntryBase):
+    entry_id: str
+    lots: list[TradingJournalLotResponse] = Field(default_factory=list)
+    open_quantity: int = Field(default=0, ge=0)
+    realized_pnl: float = Field(default=0)
+    unrealized_pnl: float = Field(default=0)
+    current_price: float | None = None
+    live_price_as_of: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TradingJournalEntryListResponse(BaseModel):
+    items: list[TradingJournalEntryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

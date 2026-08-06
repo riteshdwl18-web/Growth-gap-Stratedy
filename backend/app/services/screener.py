@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import importlib
 import random
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from uuid import uuid4
 
@@ -1289,9 +1291,70 @@ def _fetch_live_prices(symbols: list[str], force_refresh: bool = False) -> dict[
     return prices
 
 
+def get_live_price_quote(symbol: str, force_refresh: bool = True) -> dict[str, Any]:
+    clean_symbol = symbol.strip().upper()
+    if not clean_symbol:
+        return {
+            "symbol": "",
+            "current_price": None,
+            "quote_as_of": None,
+            "source": None,
+        }
+
+    prices = _fetch_live_prices([clean_symbol], force_refresh=force_refresh)
+    cached = load_live_price_cache([clean_symbol]).get(clean_symbol, {})
+
+    current_price = prices.get(clean_symbol)
+    if current_price is None and cached.get("price") is not None:
+        try:
+            current_price = float(cached.get("price"))
+        except (TypeError, ValueError):
+            current_price = None
+
+    return {
+        "symbol": clean_symbol,
+        "current_price": round(float(current_price), 2) if current_price is not None else None,
+        "quote_as_of": str(cached.get("quote_as_of") or "").strip() or None,
+        "source": str(cached.get("source") or "").strip() or None,
+    }
+
+
+def get_live_price_quotes(symbols: list[str], force_refresh: bool = False) -> dict[str, dict[str, Any]]:
+    clean_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+    if not clean_symbols:
+        return {}
+
+    prices = _fetch_live_prices(clean_symbols, force_refresh=force_refresh)
+    cached = load_live_price_cache(clean_symbols)
+
+    result: dict[str, dict[str, Any]] = {}
+    for symbol in clean_symbols:
+        current_price = prices.get(symbol)
+        cached_payload = cached.get(symbol, {})
+        if current_price is None and cached_payload.get("price") is not None:
+            try:
+                current_price = float(cached_payload.get("price"))
+            except (TypeError, ValueError):
+                current_price = None
+
+        result[symbol] = {
+            "symbol": symbol,
+            "current_price": round(float(current_price), 2) if current_price is not None else None,
+            "quote_as_of": str(cached_payload.get("quote_as_of") or "").strip() or None,
+            "source": str(cached_payload.get("source") or "").strip() or None,
+        }
+
+    return result
+
+
 def _fetch_google_finance_price(symbol: str) -> float | None:
+    yahoo_value = _fetch_yahoo_finance_price(symbol)
+    if yahoo_value is not None:
+        return yahoo_value
+
     for quote_ticker in _google_finance_quote_tickers(symbol):
-        url = f"https://www.google.com/finance/quote/{quote_ticker}"
+        encoded_ticker = urllib_parse.quote(quote_ticker, safe="")
+        url = f"https://www.google.com/finance/quote/{encoded_ticker}"
         try:
             request = urllib_request.Request(
                 url,
@@ -1328,16 +1391,128 @@ def _google_finance_quote_tickers(symbol: str) -> list[str]:
     if not symbol_norm:
         return []
 
-    if symbol_norm.endswith(".NS"):
-        base = symbol_norm[:-3]
-        return [f"{base}:NSE"]
+    base = symbol_norm
+    explicit_exchange: str | None = None
 
-    if symbol_norm.endswith(".BO"):
-        base = symbol_norm[:-3]
-        return [f"{base}:BOM"]
+    # Accept symbols like NSE:INFY / BOM:500325 as user input.
+    if ":" in base:
+        prefix, suffix = base.split(":", 1)
+        prefix = prefix.strip().upper()
+        suffix = suffix.strip().upper()
+        if prefix in {"NSE", "BSE", "BOM"} and suffix:
+            explicit_exchange = "BOM" if prefix in {"BSE", "BOM"} else "NSE"
+            base = suffix
 
-    # If exchange suffix is missing, try NSE first, then BSE.
-    return [f"{symbol_norm}:NSE", f"{symbol_norm}:BOM"]
+    # Accept symbols like INFY.NS / RELIANCE.BO / INFY.NSE / 500325.BSE.
+    for suffix, exchange in ((".NS", "NSE"), (".NSE", "NSE"), (".BO", "BOM"), (".BSE", "BOM"), (".BOM", "BOM")):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            explicit_exchange = exchange
+            break
+
+    base = base.strip().upper()
+    if not base:
+        return []
+
+    candidates: list[str] = []
+
+    def push(value: str) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    if explicit_exchange is not None:
+        push(f"{base}:{explicit_exchange}")
+        push(f"{explicit_exchange}:{base}")
+        # Fallback to other exchange when primary fails.
+        alt_exchange = "BOM" if explicit_exchange == "NSE" else "NSE"
+        push(f"{base}:{alt_exchange}")
+    else:
+        # Default path: try NSE then BOM, then raw symbol.
+        push(f"{base}:NSE")
+        push(f"{base}:BOM")
+
+    push(base)
+    return candidates
+
+
+def _yahoo_quote_symbols(symbol: str) -> list[str]:
+    symbol_norm = symbol.strip().upper()
+    if not symbol_norm:
+        return []
+
+    base = symbol_norm
+    preferred: str | None = None
+
+    if ":" in base:
+        prefix, suffix = base.split(":", 1)
+        prefix = prefix.strip().upper()
+        suffix = suffix.strip().upper()
+        if prefix in {"NSE", "BSE", "BOM"} and suffix:
+            base = suffix
+            preferred = "NS" if prefix == "NSE" else "BO"
+
+    for suffix, exchange_suffix in ((".NS", "NS"), (".NSE", "NS"), (".BO", "BO"), (".BSE", "BO"), (".BOM", "BO")):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            preferred = exchange_suffix
+            break
+
+    base = base.strip().upper()
+    if not base:
+        return []
+
+    candidates: list[str] = []
+
+    def push(value: str) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    if preferred == "NS":
+        push(f"{base}.NS")
+        push(f"{base}.BO")
+    elif preferred == "BO":
+        push(f"{base}.BO")
+        push(f"{base}.NS")
+    else:
+        push(f"{base}.NS")
+        push(f"{base}.BO")
+
+    push(base)
+    return candidates
+
+
+def _fetch_yahoo_finance_price(symbol: str) -> float | None:
+    for quote_symbol in _yahoo_quote_symbols(symbol):
+        encoded_symbol = urllib_parse.quote(quote_symbol, safe="")
+        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={encoded_symbol}"
+        try:
+            request = urllib_request.Request(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0.0.0 Safari/537.36"
+                    )
+                },
+            )
+            with urllib_request.urlopen(request, timeout=LIVE_PRICE_HTTP_TIMEOUT_SECONDS) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="ignore"))
+        except (urllib_error.URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError):
+            continue
+
+        try:
+            results = payload.get("quoteResponse", {}).get("result", [])
+            if not results:
+                continue
+            price = results[0].get("regularMarketPrice")
+            if price is None:
+                continue
+            return float(price)
+        except (TypeError, ValueError, AttributeError, IndexError):
+            continue
+
+    return None
 
 
 def _parse_google_finance_price(html: str) -> float | None:
@@ -1345,6 +1520,8 @@ def _parse_google_finance_price(html: str) -> float | None:
         r'itemprop="price"\s+content="([0-9][0-9,]*\.?[0-9]*)"',
         r'"price"\s*:\s*"?([0-9][0-9,]*\.?[0-9]*)"?',
         r'class="YMlKec fxKbKc"[^>]*>([0-9][0-9,]*\.?[0-9]*)<',
+        # Modern Google Finance payload stores the latest quote in ds:17 callback.
+        r"AF_initDataCallback\(\{key:\s*'ds:17'.*?data:\[\[\[\[null,\[[^\]]+\]\],null,([0-9][0-9,]*\.?[0-9]*)",
     ]
 
     for pattern in patterns:

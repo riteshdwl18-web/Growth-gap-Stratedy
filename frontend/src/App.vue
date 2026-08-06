@@ -10,17 +10,67 @@ const route = useRoute()
 const router = useRouter()
 const authUsername = ref('')
 const isAuthenticated = ref(false)
-const sidebarCollapsed = ref(true)
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'app.sidebarCollapsed'
 
-const navItems = [
-  { label: 'Dashboard', path: '/dashboard', icon: 'mdi-view-dashboard-outline' },
-  { label: 'Runs & Results', path: '/runs', icon: 'mdi-chart-timeline-variant' },
+const navGroups = [
+  {
+    title: 'Control Center',
+    items: [
+      {
+        label: 'Insights Hub',
+        hint: 'KPIs and strategic overview',
+        path: '/dashboard',
+        icon: 'mdi-view-dashboard-outline',
+        heroTitle: 'Consolidated Insights Across Modules',
+        heroSubtitle: 'Unified dashboard area for charts, KPIs, and cross-module performance intelligence.',
+      },
+    ],
+  },
+  {
+    title: 'Screening',
+    items: [
+      {
+        label: 'Equity Screener',
+        hint: 'Scan and validate candidates',
+        path: '/screener',
+        icon: 'mdi-file-chart-outline',
+        heroTitle: 'Validate, Process, and Run The Screener',
+        heroSubtitle: 'Upload CSV, validate schema, launch the run engine, and monitor processing flow.',
+      },
+    ],
+  },
+  {
+    title: 'Execution',
+    items: [
+      {
+        label: 'Trade Journal',
+        hint: 'Track execution and learning',
+        path: '/journal',
+        icon: 'mdi-notebook-edit-outline',
+        heroTitle: 'Capture Trades, Context, and Learning',
+        heroSubtitle: 'Document entries, exits, SL/TP discipline, and post-trade notes for consistent performance review.',
+      },
+    ],
+  },
 ]
 
 
 const activePath = computed(() => route.path)
-const isLoginRoute = computed(() => route.path === '/login' || route.path === '/signup')
+const isLoginRoute = computed(
+  () =>
+    route.path === '/login'
+    || route.path === '/signup'
+    || route.path === '/forgot-password'
+    || route.path === '/reset-password',
+)
+const navItems = computed(() => navGroups.flatMap((group) => group.items))
+const activeNavItem = computed(() => navItems.value.find((item) => isNavItemActive(item.path)) ?? null)
+const heroTitle = computed(() => activeNavItem.value?.heroTitle || 'Consolidated Insights Across Modules')
+const heroSubtitle = computed(
+  () =>
+    activeNavItem.value?.heroSubtitle ||
+    'Unified dashboard area for charts, KPIs, and cross-module performance intelligence.',
+)
+const heroModuleLabel = computed(() => activeNavItem.value?.label || 'Insights Hub')
 const userInitials = computed(() => {
   const raw = authUsername.value.trim()
   if (!raw) {
@@ -32,25 +82,17 @@ const userInitials = computed(() => {
   }
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
 })
-const sidebarMdCols = computed(() => (sidebarCollapsed.value ? 1 : 2))
-const sidebarLgCols = computed(() => (sidebarCollapsed.value ? 1 : 2))
 
 function isNavItemActive(path: string): boolean {
+  if (path === '/screener' && (activePath.value === '/runs' || activePath.value.startsWith('/runs/'))) {
+    return true
+  }
   return activePath.value === path || activePath.value.startsWith(`${path}/`)
 }
 
 function goTo(path: string): void {
   if (route.path !== path) {
     void router.push(path)
-  }
-}
-
-function toggleSidebar(): void {
-  sidebarCollapsed.value = !sidebarCollapsed.value
-  try {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed.value ? '1' : '0')
-  } catch {
-    // Ignore storage write failures.
   }
 }
 
@@ -79,12 +121,6 @@ async function ensureAppInitialized(): Promise<void> {
 }
 
 onMounted(async () => {
-  try {
-    const persisted = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
-    sidebarCollapsed.value = persisted === null ? true : persisted === '1'
-  } catch {
-    sidebarCollapsed.value = true
-  }
   await refreshAuthStatus()
   await ensureAppInitialized()
 })
@@ -116,6 +152,16 @@ onUnmounted(() => {
           <div class="brand-title">Quant Workspace</div>
         </div>
         <div class="d-flex align-center ga-3">
+          <v-btn
+            variant="tonal"
+            color="primary"
+            prepend-icon="mdi-shield-lock-outline"
+            size="small"
+            class="security-btn"
+            @click="goTo('/account/security')"
+          >
+            Security
+          </v-btn>
           <div v-if="authUsername" class="user-profile-badge">
             <div class="user-avatar">{{ userInitials }}</div>
             <div class="user-meta">
@@ -141,67 +187,68 @@ onUnmounted(() => {
           <div class="hero-grid">
             <div>
               <div class="text-overline mb-1">Operational Overview</div>
-              <h1 class="hero-title">Screen, Track, and Export With Confidence</h1>
-              <p class="hero-subtitle">
-                Production workflow for strict CSV validation, async orchestration, progress visibility, and downloadable outputs.
-              </p>
+              <h1 class="hero-title">{{ heroTitle }}</h1>
+              <p class="hero-subtitle">{{ heroSubtitle }}</p>
+            </div>
+            <div class="hero-meta d-none d-md-flex">
+              <v-chip color="primary" variant="flat" prepend-icon="mdi-compass-outline" size="small">
+                {{ heroModuleLabel }}
+              </v-chip>
             </div>
           </div>
         </v-sheet>
 
-        <v-row class="layout-grid" align="start">
-          <v-col
-            cols="12"
-            :md="sidebarMdCols"
-            :lg="sidebarLgCols"
-            class="layout-sidebar-col"
-            :class="{ 'sidebar-col-collapsed': sidebarCollapsed }"
+        <v-layout class="workspace-layout">
+          <v-navigation-drawer
+            class="workspace-drawer d-none d-md-flex"
+            permanent
+            :width="286"
+            rounded="xl"
           >
-            <v-sheet class="left-nav-panel" rounded="xl" :class="{ 'is-collapsed': sidebarCollapsed }">
-              <div class="left-nav-header">
-                <div v-if="!sidebarCollapsed">
-                  <div class="left-nav-title">Screening Console</div>
-                  <!-- <div class="left-nav-subtitle">Runs, Results, and Export</div> -->
-                </div>
-                <v-tooltip :text="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'" location="right">
-                  <template #activator="{ props }">
-                    <v-btn
-                      v-bind="props"
-                      variant="text"
-                      size="small"
-                      color="secondary"
-                      :icon="sidebarCollapsed ? 'mdi-chevron-right' : 'mdi-chevron-left'"
-                      class="sidebar-toggle-btn d-none d-md-inline-flex"
-                      @click="toggleSidebar"
-                    />
-                  </template>
-                </v-tooltip>
-              </div>
+            <v-list class="pt-2">
+              <v-list-item
+                class="workspace-drawer-header"
+                prepend-icon="mdi-view-grid-outline"
+                title="Module Navigator"
+                subtitle="Browse workspace sections"
+              />
+            </v-list>
 
-              <v-list class="left-nav-list" nav density="comfortable">
+            <v-divider />
+
+            <v-list class="left-nav-list" nav density="comfortable">
+              <template v-for="group in navGroups" :key="group.title">
+                <v-list-subheader class="left-nav-group-title">{{ group.title }}</v-list-subheader>
                 <v-list-item
-                  v-for="item in navItems"
+                  v-for="item in group.items"
                   :key="item.path"
+                  class="left-nav-item"
                   :prepend-icon="item.icon"
-                  :title="sidebarCollapsed ? '' : item.label"
+                  :title="item.label"
+                  :subtitle="item.hint"
                   rounded="lg"
                   :active="isNavItemActive(item.path)"
-                  :class="{ 'left-nav-item-collapsed': sidebarCollapsed }"
                   @click="goTo(item.path)"
                 />
-              </v-list>
-            </v-sheet>
-          </v-col>
+              </template>
+            </v-list>
 
-          <v-col cols="12" md="9" lg="10">
+            <div class="drawer-footer">
+              <div class="drawer-footer-kicker">Workspace Mode</div>
+              <div class="drawer-footer-title">Production Console</div>
+              <div class="drawer-footer-copy">Structured navigation for research, screening, and execution workflows.</div>
+            </div>
+          </v-navigation-drawer>
+
+          <div class="workspace-content">
             <v-sheet class="mobile-nav-strip mb-4 d-md-none" rounded="xl">
               <div class="d-flex ga-2 flex-wrap">
                 <v-btn
                   v-for="item in navItems"
                   :key="item.path"
                   :prepend-icon="item.icon"
-                  :variant="activePath === item.path ? 'flat' : 'tonal'"
-                  :color="activePath === item.path ? 'primary' : 'secondary'"
+                  :variant="isNavItemActive(item.path) ? 'flat' : 'tonal'"
+                  :color="isNavItemActive(item.path) ? 'primary' : 'secondary'"
                   @click="goTo(item.path)"
                 >
                   {{ item.label }}
@@ -210,8 +257,8 @@ onUnmounted(() => {
             </v-sheet>
 
             <RouterView />
-          </v-col>
-        </v-row>
+          </div>
+        </v-layout>
       </v-container>
     </v-main>
     </template>
@@ -223,10 +270,11 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid rgba(20, 48, 84, 0.12);
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(20, 48, 84, 0.14);
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.96) 0%, rgba(243, 249, 255, 0.95) 100%);
   border-radius: 999px;
   padding: 6px 12px 6px 6px;
+  box-shadow: 0 10px 18px rgba(20, 55, 108, 0.12);
 }
 
 .user-avatar {
@@ -268,6 +316,13 @@ onUnmounted(() => {
 
 .logout-btn {
   border: 1px solid rgba(20, 48, 84, 0.12);
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 248, 255, 0.95) 100%);
+}
+
+.security-btn {
+  border: 1px solid rgba(15, 76, 160, 0.24);
+  background: linear-gradient(140deg, rgba(239, 247, 255, 0.95) 0%, rgba(228, 241, 255, 0.95) 100%);
+  box-shadow: 0 8px 16px rgba(23, 75, 145, 0.16);
 }
 
 @media (max-width: 760px) {

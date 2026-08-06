@@ -506,7 +506,23 @@ async function copyRowSymbol(row: Record<string, unknown>): Promise<void> {
   }
 
   try {
-    await navigator.clipboard.writeText(symbol)
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(symbol)
+    } else {
+      const input = document.createElement('textarea')
+      input.value = symbol
+      input.setAttribute('readonly', 'true')
+      input.style.position = 'fixed'
+      input.style.top = '-9999px'
+      input.style.left = '-9999px'
+      document.body.appendChild(input)
+      input.select()
+      const copied = document.execCommand('copy')
+      document.body.removeChild(input)
+      if (!copied) {
+        throw new Error('Clipboard copy command failed')
+      }
+    }
     copyToastMessage.value = `Copied ${symbol}`
   } catch {
     copyToastMessage.value = 'Copy failed'
