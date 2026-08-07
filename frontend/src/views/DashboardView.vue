@@ -34,7 +34,7 @@ function goToJournal(): void {
   <div class="dashboard-shell">
     <v-row>
       <v-col cols="12" md="6" xl="3">
-        <v-sheet class="dashboard-kpi-card" rounded="xl">
+        <v-sheet class="dashboard-kpi-card" rounded="lg">
           <div class="dashboard-kpi-head">
             <span class="dashboard-kpi-label">Total Runs</span>
             <v-icon size="18" color="primary">mdi-counter</v-icon>
@@ -45,7 +45,7 @@ function goToJournal(): void {
       </v-col>
 
       <v-col cols="12" md="6" xl="3">
-        <v-sheet class="dashboard-kpi-card" rounded="xl">
+        <v-sheet class="dashboard-kpi-card" rounded="lg">
           <div class="dashboard-kpi-head">
             <span class="dashboard-kpi-label">Active Runs</span>
             <v-icon size="18" color="warning">mdi-pulse</v-icon>
@@ -56,7 +56,7 @@ function goToJournal(): void {
       </v-col>
 
       <v-col cols="12" md="6" xl="3">
-        <v-sheet class="dashboard-kpi-card" rounded="xl">
+        <v-sheet class="dashboard-kpi-card" rounded="lg">
           <div class="dashboard-kpi-head">
             <span class="dashboard-kpi-label">Completed / Failed</span>
             <v-icon size="18" color="success">mdi-check-decagram-outline</v-icon>
@@ -67,7 +67,7 @@ function goToJournal(): void {
       </v-col>
 
       <v-col cols="12" md="6" xl="3">
-        <v-sheet class="dashboard-kpi-card" rounded="xl">
+        <v-sheet class="dashboard-kpi-card" rounded="lg">
           <div class="dashboard-kpi-head">
             <span class="dashboard-kpi-label">Completion Rate</span>
             <v-icon size="18" color="info">mdi-chart-donut</v-icon>
@@ -80,7 +80,7 @@ function goToJournal(): void {
 
     <v-row>
       <v-col cols="12" lg="8">
-        <v-card class="dashboard-core-card" rounded="xl">
+        <v-card class="dashboard-core-card" rounded="lg">
           <v-card-title class="dashboard-card-title">
             <div>
               <div class="dashboard-card-kicker">Command View</div>
@@ -111,7 +111,7 @@ function goToJournal(): void {
       </v-col>
 
       <v-col cols="12" lg="4">
-        <v-card class="dashboard-actions-card" rounded="xl">
+        <v-card class="dashboard-actions-card" rounded="lg">
           <v-card-title class="dashboard-card-title">
             <div>
               <div class="dashboard-card-kicker">Quick Access</div>

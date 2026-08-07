@@ -50,7 +50,7 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <v-card class="pa-4 pa-md-6" rounded="xl" elevation="2">
+  <v-card class="pa-4 pa-md-6" rounded="lg" elevation="0">
     <div class="text-overline text-medium-emphasis mb-1">Account Security</div>
     <h2 class="text-h5 font-weight-bold mb-2">Change Password</h2>
     <p class="text-body-2 text-medium-emphasis mb-5">

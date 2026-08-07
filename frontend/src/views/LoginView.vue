@@ -6,9 +6,9 @@ import { login } from '../services/auth'
 
 const router = useRouter()
 const route = useRoute()
-const brandName = 'Nexora Markets'
-const brandTagline = 'Quant Workspace'
-const username = ref('')
+const brandName = 'EquityEdge'
+const brandTagline = 'Insight. Strategy. Growth.'
+const email = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
@@ -19,14 +19,14 @@ function isValidEmail(value: string): boolean {
 
 async function submitLogin(): Promise<void> {
   errorMessage.value = ''
-  if (!isValidEmail(username.value)) {
+  if (!isValidEmail(email.value)) {
     errorMessage.value = 'Please enter a valid email address'
     return
   }
   loading.value = true
   try {
     await login({
-      username: username.value.trim(),
+      email: email.value.trim(),
       password: password.value,
     })
     const redirectTo = String(route.query.redirect ?? '/dashboard')
@@ -45,10 +45,10 @@ async function submitLogin(): Promise<void> {
     <div class="login-bg"></div>
     <v-row class="login-row ma-0" align="center" justify="center">
       <v-col cols="12" sm="11" md="10" lg="8" xl="7">
-        <v-card class="login-shell" rounded="xl" elevation="14">
+        <v-card class="login-shell" rounded="lg" elevation="0">
           <v-row class="ma-0">
             <v-col cols="12" md="6" class="brand-pane">
-              <div class="brand-pill">Live Trading Analytics</div>
+              <img src="/equityedge-logo.svg" alt="EquityEdge logo" class="auth-brand-logo" />
               <h1 class="brand-name">{{ brandName }}</h1>
               <div class="brand-tagline">{{ brandTagline }}</div>
               <p class="brand-copy">
@@ -99,7 +99,7 @@ async function submitLogin(): Promise<void> {
                 </v-alert>
 
                 <v-text-field
-                  v-model="username"
+                  v-model="email"
                   label="Email"
                   type="email"
                   prepend-inner-icon="mdi-email-outline"
@@ -121,7 +121,7 @@ async function submitLogin(): Promise<void> {
                   color="primary"
                   size="large"
                   :loading="loading"
-                  :disabled="!username.trim() || !password || !isValidEmail(username)"
+                  :disabled="!email.trim() || !password || !isValidEmail(email)"
                   @click="submitLogin"
                 >
                   Login
@@ -160,35 +160,30 @@ async function submitLogin(): Promise<void> {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(135deg, rgba(238, 243, 250, 0.28) 0%, rgba(213, 226, 243, 0.28) 100%),
+    linear-gradient(160deg, rgba(15, 23, 42, 0.5) 0%, rgba(17, 24, 39, 0.68) 100%),
     url('/login-market-grid.svg') center/cover no-repeat,
-    radial-gradient(circle at 15% 20%, rgba(255, 217, 61, 0.2) 0%, transparent 34%),
-    radial-gradient(circle at 80% 72%, rgba(11, 96, 176, 0.22) 0%, transparent 40%),
-    linear-gradient(135deg, #eef3fa 0%, #e4edf8 42%, #d5e2f3 100%);
+    #111827;
 }
 
 .login-shell {
   position: relative;
-  border: 1px solid rgba(31, 47, 70, 0.12);
+  border: 1px solid #e2e5ea;
   overflow: hidden;
 }
 
 .brand-pane {
-  background:
-    linear-gradient(155deg, rgba(9, 37, 78, 0.94) 0%, rgba(12, 59, 122, 0.92) 52%, rgba(16, 75, 155, 0.9) 100%);
+  background: #1d2939;
   color: #f2f7ff;
   padding: 42px 36px;
 }
 
-.brand-pill {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 999px;
-  padding: 7px 13px;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.auth-brand-logo {
+  width: 124px;
+  max-width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px;
 }
 
 .brand-name {
@@ -239,7 +234,7 @@ async function submitLogin(): Promise<void> {
 }
 
 .form-pane {
-  background: rgba(255, 255, 255, 0.97);
+  background: #ffffff;
 }
 
 .form-pane :deep(.v-card-title) {
@@ -255,7 +250,7 @@ async function submitLogin(): Promise<void> {
 }
 
 .signup-link {
-  color: #1f4f9a;
+  color: #2563eb;
   font-weight: 600;
   margin-left: 4px;
   text-decoration: none;

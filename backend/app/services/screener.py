@@ -1021,7 +1021,14 @@ def _filter_results(
 ) -> list[dict[str, Any]]:
     next_rows = rows
     status_norm = final_status.strip().lower()
-    if status_norm and status_norm != "all":
+    if status_norm == "skipped":
+        next_rows = [
+            row
+            for row in next_rows
+            if not str(row.get("final_status", "")).strip()
+            and bool(str(row.get("error", "")).strip())
+        ]
+    elif status_norm and status_norm != "all":
         next_rows = [
             row
             for row in next_rows

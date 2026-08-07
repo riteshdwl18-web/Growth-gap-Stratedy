@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 ALLOWED_INPUT_HEADERS = [
@@ -109,12 +109,12 @@ class HealthResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
+    email: str = Field(validation_alias=AliasChoices("email", "username"))
     password: str
 
 
 class SignupRequest(BaseModel):
-    username: str
+    email: str = Field(validation_alias=AliasChoices("email", "username"))
     password: str
 
 
@@ -134,6 +134,7 @@ class ResetPasswordRequest(BaseModel):
 
 class AuthStatusResponse(BaseModel):
     authenticated: bool
+    email: str | None = None
     username: str | None = None
     signup_required: bool = False
 

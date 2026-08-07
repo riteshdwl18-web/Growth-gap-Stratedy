@@ -6,9 +6,9 @@ import { signup } from '../services/auth'
 
 const router = useRouter()
 const route = useRoute()
-const brandName = 'Nexora Markets'
-const brandTagline = 'Quant Workspace'
-const username = ref('')
+const brandName = 'EquityEdge'
+const brandTagline = 'Insight. Strategy. Growth.'
+const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const loading = ref(false)
@@ -24,7 +24,7 @@ function isValidEmail(value: string): boolean {
 
 async function submitSignup(): Promise<void> {
   errorMessage.value = ''
-  if (!isValidEmail(username.value)) {
+  if (!isValidEmail(email.value)) {
     errorMessage.value = 'Please enter a valid email address'
     return
   }
@@ -36,7 +36,7 @@ async function submitSignup(): Promise<void> {
   loading.value = true
   try {
     await signup({
-      username: username.value.trim(),
+      email: email.value.trim(),
       password: password.value,
     })
 
@@ -55,9 +55,10 @@ async function submitSignup(): Promise<void> {
     <div class="signup-bg"></div>
     <v-row class="signup-row ma-0" align="center" justify="center">
       <v-col cols="12" sm="11" md="10" lg="8" xl="7">
-        <v-card class="signup-shell" rounded="xl" elevation="14">
+        <v-card class="signup-shell" rounded="lg" elevation="0">
           <v-row class="ma-0">
             <v-col cols="12" md="6" class="brand-pane">
+              <img src="/equityedge-logo.svg" alt="EquityEdge logo" class="auth-brand-logo" />
               <div class="brand-pill">First-Time Setup</div>
               <h1 class="brand-name">{{ brandName }}</h1>
               <div class="brand-tagline">{{ brandTagline }}</div>
@@ -90,7 +91,7 @@ async function submitSignup(): Promise<void> {
                 </v-alert>
 
                 <v-text-field
-                  v-model="username"
+                  v-model="email"
                   label="Email"
                   type="email"
                   prepend-inner-icon="mdi-email-outline"
@@ -123,10 +124,21 @@ async function submitSignup(): Promise<void> {
                   color="primary"
                   size="large"
                   :loading="loading"
-                  :disabled="!username.trim() || !password || !confirmPassword || passwordMismatch || !isValidEmail(username)"
+                  :disabled="!email.trim() || !password || !confirmPassword || passwordMismatch || !isValidEmail(email)"
                   @click="submitSignup"
                 >
                   Create Account
+                </v-btn>
+
+                <v-btn
+                  block
+                  variant="text"
+                  class="mt-2"
+                  color="secondary"
+                  prepend-icon="mdi-arrow-left"
+                  to="/login"
+                >
+                  Back to Login
                 </v-btn>
               </v-card-text>
             </v-col>
@@ -153,24 +165,30 @@ async function submitSignup(): Promise<void> {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(135deg, rgba(238, 243, 250, 0.28) 0%, rgba(213, 226, 243, 0.28) 100%),
+    linear-gradient(160deg, rgba(15, 23, 42, 0.5) 0%, rgba(17, 24, 39, 0.68) 100%),
     url('/login-market-grid.svg') center/cover no-repeat,
-    radial-gradient(circle at 15% 20%, rgba(255, 217, 61, 0.2) 0%, transparent 34%),
-    radial-gradient(circle at 80% 72%, rgba(11, 96, 176, 0.22) 0%, transparent 40%),
-    linear-gradient(135deg, #eef3fa 0%, #e4edf8 42%, #d5e2f3 100%);
+    #111827;
 }
 
 .signup-shell {
   position: relative;
-  border: 1px solid rgba(31, 47, 70, 0.12);
+  border: 1px solid #e2e5ea;
   overflow: hidden;
 }
 
 .brand-pane {
-  background:
-    linear-gradient(155deg, rgba(9, 37, 78, 0.94) 0%, rgba(12, 59, 122, 0.92) 52%, rgba(16, 75, 155, 0.9) 100%);
+  background: #1d2939;
   color: #f2f7ff;
   padding: 42px 36px;
+}
+
+.auth-brand-logo {
+  width: 124px;
+  max-width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px;
 }
 
 .brand-pill {
@@ -206,7 +224,7 @@ async function submitSignup(): Promise<void> {
 }
 
 .form-pane {
-  background: rgba(255, 255, 255, 0.97);
+  background: #ffffff;
 }
 
 .form-pane :deep(.v-card-title) {

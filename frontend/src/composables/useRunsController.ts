@@ -244,6 +244,7 @@ const hasActiveRun = computed(() => !!activeRun.value)
 
 let pollHandle: number | undefined
 let initialized = false
+const industryGroupsCache = new Map<string, string[]>()
 
 async function checkHealth(): Promise<void> {
   try {
@@ -434,7 +435,11 @@ async function fetchRunResults(runId: string, resetPage = false, livePriceOverri
       }
     }
 
-    await fetchRunIndustryGroups(runId)
+    if (industryGroupsCache.has(runId)) {
+      resultIndustryGroups.value = industryGroupsCache.get(runId) ?? []
+    } else {
+      await fetchRunIndustryGroups(runId)
+    }
   } catch {
     runResults.value = []
     resultIndustryGroups.value = []
@@ -456,6 +461,7 @@ async function fetchRunIndustryGroups(runId: string): Promise<void> {
       throw new Error('Failed to load industry groups')
     }
     const data = (await response.json()) as string[]
+    industryGroupsCache.set(runId, data)
     resultIndustryGroups.value = data
   } catch {
     resultIndustryGroups.value = []
@@ -618,22 +624,6 @@ async function stopRun(runId: string): Promise<void> {
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : 'Unexpected error while stopping run'
   }
-}
-
-async function retryFailedRows(runId: string): Promise<RunSummary> {
-  const response = await apiFetch(`${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/retry-failed`, {
-    method: 'POST',
-  })
-  if (!response.ok) {
-    await _throwApiError(response, 'Failed to start retry run')
-  }
-
-  const created = (await response.json()) as RunSummary
-  selectedRunId.value = created.run_id
-  selectedRunCache.value = created
-  await fetchRuns(true)
-  await fetchRunResults(created.run_id, true)
-  return created
 }
 
 function setSelectedRun(runId: string, options?: { fetch?: boolean }): void {
@@ -963,7 +953,6 @@ export function useRunsController() {
     startRunFromUpload,
     startValidatedWorkflowRun,
     stopRun,
-    retryFailedRows,
     setSelectedRun,
     downloadSelectedRunCsv,
     downloadFilteredRunsCsv,

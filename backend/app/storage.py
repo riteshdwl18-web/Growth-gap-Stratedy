@@ -59,6 +59,7 @@ class AppMetaRecord(BaseOrmModel):
 class RunRecord(BaseOrmModel):
     run_id = CharField(primary_key=True, max_length=64)
     username = CharField(default="", index=True)
+    user_id = CharField(default="", max_length=64)
     status = CharField(max_length=40)
     created_at = CharField(max_length=64)
     payload_json = TextField()
@@ -81,6 +82,7 @@ class ResultRecord(BaseOrmModel):
 class UploadRecord(BaseOrmModel):
     upload_id = CharField(primary_key=True, max_length=64)
     username = CharField(default="", index=True)
+    user_id = CharField(default="", max_length=64)
     created_at = CharField(max_length=64)
     valid = BooleanField(default=False)
     payload_json = TextField()
@@ -91,6 +93,7 @@ class UploadRecord(BaseOrmModel):
 
 
 class UserRecord(BaseOrmModel):
+    user_id = CharField(max_length=64, default="")
     username = CharField(primary_key=True, max_length=120)
     password_hash = TextField()
     salt = TextField()
@@ -103,6 +106,7 @@ class UserRecord(BaseOrmModel):
 class SessionRecord(BaseOrmModel):
     token = CharField(primary_key=True, max_length=64)
     username = CharField(index=True)
+    user_id = CharField(default="", max_length=64)
     expires_at = CharField(max_length=64, index=True)
     created_at = CharField(max_length=64)
 
@@ -113,6 +117,7 @@ class SessionRecord(BaseOrmModel):
 class PasswordResetTokenRecord(BaseOrmModel):
     token_hash = CharField(primary_key=True, max_length=128)
     username = CharField(index=True)
+    user_id = CharField(default="", max_length=64)
     expires_at = CharField(max_length=64, index=True)
     used_at = CharField(max_length=64, default="", index=True)
     created_at = CharField(max_length=64)
@@ -140,6 +145,7 @@ class LivePriceCacheRecord(BaseOrmModel):
 class UserResultFilterRecord(BaseOrmModel):
     filter_id = CharField(primary_key=True, max_length=64)
     username = CharField(index=True)
+    user_id = CharField(default="", max_length=64)
     name = CharField(max_length=60)
     query_json = TextField()
     is_default = BooleanField(default=False, index=True)
@@ -157,6 +163,7 @@ class UserResultFilterRecord(BaseOrmModel):
 class TradingJournalEntryRecord(BaseOrmModel):
     entry_id = CharField(primary_key=True, max_length=64)
     username = CharField(index=True)
+    user_id = CharField(default="", max_length=64)
     trade_date = CharField(max_length=20, index=True)
     session = CharField(max_length=10, index=True)
     script = CharField(max_length=40, index=True)
@@ -228,11 +235,13 @@ def _decode_json(raw: str, default: Any) -> Any:
 def _ensure_database():
     global _database, _db_initialized
     if _db_initialized:
+        _ensure_user_identity_schema()
         _ensure_trading_journal_schema()
         return _database
 
     with _db_lock:
         if _db_initialized:
+            _ensure_user_identity_schema()
             _ensure_trading_journal_schema()
             return _database
 
@@ -263,6 +272,7 @@ def _ensure_database():
                 safe=True,
             )
             _bootstrap_from_legacy_once()
+            _ensure_user_identity_schema()
             _ensure_trading_journal_schema()
 
         _db_initialized = True
@@ -301,6 +311,128 @@ def _ensure_trading_journal_schema() -> None:
             )
         except Exception:
             pass
+
+
+def _ensure_user_identity_schema() -> None:
+    if _database is None:
+        return
+
+    table_column_map = {
+        "users": "VARCHAR(64)",
+        "runs": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "uploads": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "sessions": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "password_reset_tokens": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "user_result_filters": "VARCHAR(64) NOT NULL DEFAULT ''",
+        "trading_journal_entries": "VARCHAR(64) NOT NULL DEFAULT ''",
+    }
+
+    for table_name, column_ddl in table_column_map.items():
+        try:
+            columns = [column.name for column in _database.get_columns(table_name)]
+        except Exception:
+            continue
+        if "user_id" in columns:
+            continue
+        try:
+            _database.execute_sql(f"ALTER TABLE {table_name} ADD COLUMN user_id {column_ddl}")
+        except Exception:
+            pass
+
+    try:
+        _database.execute_sql("CREATE UNIQUE INDEX IF NOT EXISTS users_user_id_unique ON users(user_id)")
+    except Exception:
+        pass
+
+    for table_name in (
+        "runs",
+        "uploads",
+        "sessions",
+        "password_reset_tokens",
+        "user_result_filters",
+        "trading_journal_entries",
+    ):
+        try:
+            _database.execute_sql(f"CREATE INDEX IF NOT EXISTS {table_name}_user_id_idx ON {table_name}(user_id)")
+        except Exception:
+            pass
+
+        with _database.connection_context():
+                users_missing_id = UserRecord.select().where((UserRecord.user_id.is_null()) | (UserRecord.user_id == ""))
+                for user in users_missing_id:
+                        user.user_id = uuid4().hex
+                        user.save()
+
+                _database.execute_sql(
+                        """
+                        UPDATE runs AS t
+                        SET user_id = u.user_id
+                        FROM users AS u
+                        WHERE t.username = u.username
+                            AND (t.user_id IS NULL OR t.user_id = '')
+                        """
+                )
+                _database.execute_sql(
+                        """
+                        UPDATE uploads AS t
+                        SET user_id = u.user_id
+                        FROM users AS u
+                        WHERE t.username = u.username
+                            AND (t.user_id IS NULL OR t.user_id = '')
+                        """
+                )
+                _database.execute_sql(
+                        """
+                        UPDATE sessions AS t
+                        SET user_id = u.user_id
+                        FROM users AS u
+                        WHERE t.username = u.username
+                            AND (t.user_id IS NULL OR t.user_id = '')
+                        """
+                )
+                _database.execute_sql(
+                        """
+                        UPDATE password_reset_tokens AS t
+                        SET user_id = u.user_id
+                        FROM users AS u
+                        WHERE t.username = u.username
+                            AND (t.user_id IS NULL OR t.user_id = '')
+                        """
+                )
+                _database.execute_sql(
+                        """
+                        UPDATE user_result_filters AS t
+                        SET user_id = u.user_id
+                        FROM users AS u
+                        WHERE t.username = u.username
+                            AND (t.user_id IS NULL OR t.user_id = '')
+                        """
+                )
+                _database.execute_sql(
+                        """
+                        UPDATE trading_journal_entries AS t
+                        SET user_id = u.user_id
+                        FROM users AS u
+                        WHERE t.username = u.username
+                            AND (t.user_id IS NULL OR t.user_id = '')
+                        """
+                )
+
+
+def _lookup_user_id(username: str) -> str:
+    clean_username = str(username or "").strip().lower()
+    if not clean_username:
+        return ""
+
+    record = UserRecord.get_or_none(UserRecord.username == clean_username)
+    if record is None:
+        return ""
+    if str(record.user_id or "").strip():
+        return str(record.user_id)
+    generated = uuid4().hex
+    record.user_id = generated
+    record.save()
+    return generated
 
 
 def _db_context():
@@ -351,16 +483,19 @@ def _migrate_from_legacy_sqlite() -> None:
 
         if _sqlite_has_table(conn, "runs"):
             for row in conn.execute("SELECT run_id, username, status, created_at, payload_json FROM runs"):
+                row_username = str(row["username"] or "")
                 RunRecord.insert(
                     run_id=str(row["run_id"]),
-                    username=str(row["username"] or ""),
+                    username=row_username,
+                    user_id=_lookup_user_id(row_username),
                     status=str(row["status"] or "queued"),
                     created_at=str(row["created_at"] or now_iso()),
                     payload_json=str(row["payload_json"] or "{}"),
                 ).on_conflict(
                     conflict_target=[RunRecord.run_id],
                     update={
-                        RunRecord.username: str(row["username"] or ""),
+                        RunRecord.username: row_username,
+                        RunRecord.user_id: _lookup_user_id(row_username),
                         RunRecord.status: str(row["status"] or "queued"),
                         RunRecord.created_at: str(row["created_at"] or now_iso()),
                         RunRecord.payload_json: str(row["payload_json"] or "{}"),
@@ -377,16 +512,19 @@ def _migrate_from_legacy_sqlite() -> None:
 
         if _sqlite_has_table(conn, "uploads"):
             for row in conn.execute("SELECT upload_id, username, created_at, valid, payload_json FROM uploads"):
+                row_username = str(row["username"] or "")
                 UploadRecord.insert(
                     upload_id=str(row["upload_id"]),
-                    username=str(row["username"] or ""),
+                    username=row_username,
+                    user_id=_lookup_user_id(row_username),
                     created_at=str(row["created_at"] or now_iso()),
                     valid=bool(int(row["valid"] or 0)),
                     payload_json=str(row["payload_json"] or "{}"),
                 ).on_conflict(
                     conflict_target=[UploadRecord.upload_id],
                     update={
-                        UploadRecord.username: str(row["username"] or ""),
+                        UploadRecord.username: row_username,
+                        UploadRecord.user_id: _lookup_user_id(row_username),
                         UploadRecord.created_at: str(row["created_at"] or now_iso()),
                         UploadRecord.valid: bool(int(row["valid"] or 0)),
                         UploadRecord.payload_json: str(row["payload_json"] or "{}"),
@@ -396,6 +534,7 @@ def _migrate_from_legacy_sqlite() -> None:
         if _sqlite_has_table(conn, "users"):
             for row in conn.execute("SELECT username, password_hash, salt, created_at FROM users"):
                 UserRecord.insert(
+                    user_id=uuid4().hex,
                     username=str(row["username"]),
                     password_hash=str(row["password_hash"]),
                     salt=str(row["salt"]),
@@ -403,6 +542,7 @@ def _migrate_from_legacy_sqlite() -> None:
                 ).on_conflict(
                     conflict_target=[UserRecord.username],
                     update={
+                        UserRecord.user_id: UserRecord.user_id,
                         UserRecord.password_hash: str(row["password_hash"]),
                         UserRecord.salt: str(row["salt"]),
                         UserRecord.created_at: str(row["created_at"] or now_iso()),
@@ -411,15 +551,18 @@ def _migrate_from_legacy_sqlite() -> None:
 
         if _sqlite_has_table(conn, "sessions"):
             for row in conn.execute("SELECT token, username, expires_at, created_at FROM sessions"):
+                row_username = str(row["username"])
                 SessionRecord.insert(
                     token=str(row["token"]),
-                    username=str(row["username"]),
+                    username=row_username,
+                    user_id=_lookup_user_id(row_username),
                     expires_at=str(row["expires_at"]),
                     created_at=str(row["created_at"] or now_iso()),
                 ).on_conflict(
                     conflict_target=[SessionRecord.token],
                     update={
-                        SessionRecord.username: str(row["username"]),
+                        SessionRecord.username: row_username,
+                        SessionRecord.user_id: _lookup_user_id(row_username),
                         SessionRecord.expires_at: str(row["expires_at"]),
                         SessionRecord.created_at: str(row["created_at"] or now_iso()),
                     },
@@ -451,9 +594,11 @@ def _migrate_from_legacy_sqlite() -> None:
             for row in conn.execute(
                 "SELECT filter_id, username, name, query_json, is_default, created_at, updated_at FROM user_result_filters"
             ):
+                row_username = str(row["username"])
                 UserResultFilterRecord.insert(
                     filter_id=str(row["filter_id"]),
-                    username=str(row["username"]),
+                    username=row_username,
+                    user_id=_lookup_user_id(row_username),
                     name=str(row["name"]),
                     query_json=str(row["query_json"] or "{}"),
                     is_default=bool(int(row["is_default"] or 0)),
@@ -462,7 +607,8 @@ def _migrate_from_legacy_sqlite() -> None:
                 ).on_conflict(
                     conflict_target=[UserResultFilterRecord.filter_id],
                     update={
-                        UserResultFilterRecord.username: str(row["username"]),
+                        UserResultFilterRecord.username: row_username,
+                        UserResultFilterRecord.user_id: _lookup_user_id(row_username),
                         UserResultFilterRecord.name: str(row["name"]),
                         UserResultFilterRecord.query_json: str(row["query_json"] or "{}"),
                         UserResultFilterRecord.is_default: bool(int(row["is_default"] or 0)),
@@ -522,12 +668,14 @@ def export_csv_path(run_id: str) -> Path:
 
 def save_run(run_id: str, payload: dict[str, Any]) -> None:
     username = str(payload.get("username", ""))
+    user_id = _lookup_user_id(username)
     status = str(payload.get("status", "queued"))
     created_at = str(payload.get("created_at", now_iso()))
     with _db_context():
         RunRecord.insert(
             run_id=run_id,
             username=username,
+            user_id=user_id,
             status=status,
             created_at=created_at,
             payload_json=_encode_json(payload),
@@ -535,6 +683,7 @@ def save_run(run_id: str, payload: dict[str, Any]) -> None:
             conflict_target=[RunRecord.run_id],
             update={
                 RunRecord.username: username,
+                RunRecord.user_id: user_id,
                 RunRecord.status: status,
                 RunRecord.created_at: created_at,
                 RunRecord.payload_json: _encode_json(payload),
@@ -580,12 +729,14 @@ def append_result(run_id: str, row: dict[str, Any]) -> None:
 
 
 def save_upload(upload_id: str, payload: dict[str, Any], username: str) -> None:
+    user_id = _lookup_user_id(username)
     created_at = str(payload.get("created_at", now_iso()))
     valid = bool(payload.get("valid", False))
     with _db_context():
         UploadRecord.insert(
             upload_id=upload_id,
             username=username,
+            user_id=user_id,
             created_at=created_at,
             valid=valid,
             payload_json=_encode_json(payload),
@@ -593,6 +744,7 @@ def save_upload(upload_id: str, payload: dict[str, Any], username: str) -> None:
             conflict_target=[UploadRecord.upload_id],
             update={
                 UploadRecord.username: username,
+                UploadRecord.user_id: user_id,
                 UploadRecord.created_at: created_at,
                 UploadRecord.valid: valid,
                 UploadRecord.payload_json: _encode_json(payload),
@@ -621,7 +773,12 @@ def load_user(username: str) -> dict[str, Any] | None:
         record = UserRecord.get_or_none(UserRecord.username == username)
         if record is None:
             return None
+        if not str(record.user_id or "").strip():
+            record.user_id = uuid4().hex
+            record.save()
         return {
+            "user_id": str(record.user_id),
+            "email": record.username,
             "username": record.username,
             "password_hash": record.password_hash,
             "salt": record.salt,
@@ -633,6 +790,7 @@ def save_user(username: str, password_hash: str, salt: str) -> None:
     created_at = now_iso()
     with _db_context():
         UserRecord.create(
+            user_id=uuid4().hex,
             username=username,
             password_hash=password_hash,
             salt=salt,
@@ -651,17 +809,20 @@ def update_user_password(username: str, password_hash: str, salt: str) -> bool:
 
 
 def save_session(token: str, username: str, expires_at: str) -> None:
+    user_id = _lookup_user_id(username)
     created_at = now_iso()
     with _db_context():
         SessionRecord.insert(
             token=token,
             username=username,
+            user_id=user_id,
             expires_at=expires_at,
             created_at=created_at,
         ).on_conflict(
             conflict_target=[SessionRecord.token],
             update={
                 SessionRecord.username: username,
+                SessionRecord.user_id: user_id,
                 SessionRecord.expires_at: expires_at,
                 SessionRecord.created_at: created_at,
             },
@@ -676,6 +837,7 @@ def load_session(token: str) -> dict[str, Any] | None:
             return None
         return {
             "token": record.token,
+            "user_id": str(record.user_id or ""),
             "username": record.username,
             "expires_at": record.expires_at,
             "created_at": record.created_at,
@@ -693,11 +855,13 @@ def delete_sessions_for_user(username: str) -> None:
 
 
 def save_password_reset_token(token_hash: str, username: str, expires_at: str) -> None:
+    user_id = _lookup_user_id(username)
     created_at = now_iso()
     with _db_context():
         PasswordResetTokenRecord.insert(
             token_hash=token_hash,
             username=username,
+            user_id=user_id,
             expires_at=expires_at,
             used_at="",
             created_at=created_at,
@@ -705,6 +869,7 @@ def save_password_reset_token(token_hash: str, username: str, expires_at: str) -
             conflict_target=[PasswordResetTokenRecord.token_hash],
             update={
                 PasswordResetTokenRecord.username: username,
+                PasswordResetTokenRecord.user_id: user_id,
                 PasswordResetTokenRecord.expires_at: expires_at,
                 PasswordResetTokenRecord.used_at: "",
                 PasswordResetTokenRecord.created_at: created_at,
@@ -833,6 +998,7 @@ def save_user_result_filter(
     max_filters: int = 5,
     filter_id: str | None = None,
 ) -> dict[str, Any]:
+    user_id = _lookup_user_id(username)
     now = now_iso()
     normalized_name = name.strip()
     if not normalized_name:
@@ -856,6 +1022,7 @@ def save_user_result_filter(
             record = UserResultFilterRecord(
                 filter_id=next_filter_id,
                 username=username,
+                user_id=user_id,
                 name=normalized_name,
                 query_json=_encode_json(query),
                 is_default=bool(is_default),
@@ -865,6 +1032,7 @@ def save_user_result_filter(
         else:
             created_at = existing.created_at
             record = existing
+            record.user_id = user_id
             record.name = normalized_name
             record.query_json = _encode_json(query)
             record.is_default = bool(is_default)
@@ -937,6 +1105,7 @@ def backfill_legacy_ownership(username: str) -> dict[str, int]:
 
     migrated_runs = 0
     migrated_uploads = 0
+    owner_user_id = _lookup_user_id(owner)
 
     with _db_context():
         for record in RunRecord.select().where((RunRecord.username.is_null()) | (RunRecord.username == "")):
@@ -945,6 +1114,7 @@ def backfill_legacy_ownership(username: str) -> dict[str, int]:
                 payload = {}
             payload["username"] = owner
             record.username = owner
+            record.user_id = owner_user_id
             record.payload_json = _encode_json(payload)
             record.save()
             migrated_runs += 1
@@ -955,6 +1125,7 @@ def backfill_legacy_ownership(username: str) -> dict[str, int]:
                 payload = {}
             payload["username"] = owner
             record.username = owner
+            record.user_id = owner_user_id
             record.payload_json = _encode_json(payload)
             record.save()
             migrated_uploads += 1
@@ -1128,6 +1299,7 @@ def _load_trading_journal_lots_map(entry_ids: list[str]) -> dict[str, list[dict[
 def create_trading_journal_entry(username: str, payload: dict[str, Any]) -> dict[str, Any]:
     now = now_iso()
     entry_id = uuid4().hex
+    user_id = _lookup_user_id(username)
     script = str(payload.get("script", "")).strip().upper()
     lots = _normalize_trading_journal_lots(payload)
     summary = _summarize_trading_journal_lots(payload)
@@ -1135,6 +1307,7 @@ def create_trading_journal_entry(username: str, payload: dict[str, Any]) -> dict
         record = TradingJournalEntryRecord.create(
             entry_id=entry_id,
             username=username,
+            user_id=user_id,
             trade_date=str(payload.get("trade_date", "")).strip(),
             session=str(payload.get("session", "Open")).strip(),
             script=script,
@@ -1163,6 +1336,7 @@ def create_trading_journal_entry(username: str, payload: dict[str, Any]) -> dict
 
 def update_trading_journal_entry(username: str, entry_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     now = now_iso()
+    user_id = _lookup_user_id(username)
     lots = _normalize_trading_journal_lots(payload)
     summary = _summarize_trading_journal_lots(payload)
     with _db_context():
@@ -1173,6 +1347,7 @@ def update_trading_journal_entry(username: str, entry_id: str, payload: dict[str
         if record is None:
             return None
 
+        record.user_id = user_id
         record.trade_date = str(payload.get("trade_date", "")).strip()
         record.session = str(payload.get("session", "Open")).strip()
         record.script = str(payload.get("script", "")).strip().upper()

@@ -38,9 +38,16 @@ async function submitForgotPassword(): Promise<void> {
     <div class="login-bg"></div>
     <v-row class="login-row ma-0" align="center" justify="center">
       <v-col cols="12" sm="11" md="8" lg="6" xl="5">
-        <v-card class="login-shell" rounded="xl" elevation="14">
+        <v-card class="login-shell" rounded="lg" elevation="0">
           <v-card-title class="pt-8 px-8 pb-2">
             <div>
+              <div class="auth-brand-head">
+                <img src="/equityedge-logo.svg" alt="EquityEdge logo" class="auth-brand-logo" />
+                <div>
+                  <div class="auth-brand-name">EquityEdge</div>
+                  <div class="auth-brand-tag">Insight. Strategy. Growth.</div>
+                </div>
+              </div>
               <div class="text-overline text-medium-emphasis">Account Recovery</div>
               <h2 class="text-h5 font-weight-bold mb-1">Forgot Password</h2>
               <div class="text-body-2 text-medium-emphasis">
@@ -121,22 +128,51 @@ async function submitForgotPassword(): Promise<void> {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(135deg, rgba(238, 243, 250, 0.28) 0%, rgba(213, 226, 243, 0.28) 100%),
+    linear-gradient(160deg, rgba(15, 23, 42, 0.5) 0%, rgba(17, 24, 39, 0.68) 100%),
     url('/login-market-grid.svg') center/cover no-repeat,
-    radial-gradient(circle at 15% 20%, rgba(255, 217, 61, 0.2) 0%, transparent 34%),
-    radial-gradient(circle at 80% 72%, rgba(11, 96, 176, 0.22) 0%, transparent 40%),
-    linear-gradient(135deg, #eef3fa 0%, #e4edf8 42%, #d5e2f3 100%);
+    #111827;
 }
 
 .login-shell {
   position: relative;
-  border: 1px solid rgba(31, 47, 70, 0.12);
+  border: 1px solid #e2e5ea;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.97);
+  background: #ffffff;
+}
+
+.auth-brand-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.auth-brand-logo {
+  width: 54px;
+  height: 54px;
+  border-radius: 10px;
+  border: 1px solid #e2e5ea;
+  background: #ffffff;
+  object-fit: contain;
+}
+
+.auth-brand-name {
+  font-family: Manrope, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: #0f172a;
+}
+
+.auth-brand-tag {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: #64748b;
 }
 
 .signup-link {
-  color: #1f4f9a;
+  color: #2563eb;
   font-weight: 600;
   margin-left: 4px;
   text-decoration: none;

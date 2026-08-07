@@ -636,7 +636,7 @@ function onJournalPageChange(nextPage: number): void {
             <v-btn class="journal-toolbar-btn" color="primary" variant="flat" prepend-icon="mdi-table-plus" @click="openCreateDialog">New Trade</v-btn>
             <v-btn
               class="journal-toolbar-btn"
-              color="secondary"
+              color="primary"
               variant="tonal"
               prepend-icon="mdi-refresh"
               :loading="livePricesRefreshing"
@@ -644,7 +644,7 @@ function onJournalPageChange(nextPage: number): void {
             >
               Refresh Prices
             </v-btn>
-            <v-btn class="journal-toolbar-btn" color="secondary" variant="tonal" prepend-icon="mdi-file-export-outline" @click="exportCsv">Export CSV</v-btn>
+            <v-btn class="journal-toolbar-btn" color="success" variant="tonal" prepend-icon="mdi-file-export-outline" @click="exportCsv">Export CSV</v-btn>
           </div>
         </v-card-title>
 

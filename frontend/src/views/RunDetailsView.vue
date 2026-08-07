@@ -11,7 +11,6 @@ const router = useRouter()
 const detailDrawerOpen = ref(false)
 const selectedResult = ref<Record<string, unknown> | null>(null)
 const downloadConfirmOpen = ref(false)
-const retryFailedConfirmOpen = ref(false)
 const filterDialogOpen = ref(false)
 const copyToastOpen = ref(false)
 const copyToastMessage = ref('')
@@ -29,7 +28,6 @@ const favoriteRenameReplaceQuery = ref(false)
 const favoriteRenameBusy = ref(false)
 const favoriteRenameError = ref('')
 const deleteFavoriteConfirmOpen = ref(false)
-const retryFailedBusy = ref(false)
 const runActionError = ref('')
 const cooldownNowMs = ref(Date.now())
 let cooldownTickerHandle: number | undefined
@@ -81,7 +79,33 @@ const resultStatusOptions = [
   { title: 'All Result Statuses', value: 'all' },
   { title: 'PASS', value: 'pass' },
   { title: 'FAIL', value: 'fail' },
+  { title: 'SKIPPED', value: 'skipped' },
 ]
+
+function parseResultFilterFromRouteQuery(): 'all' | 'pass' | 'fail' | 'skipped' | null {
+  const value = String(route.query.result ?? '').trim().toLowerCase()
+  if (value === 'all' || value === 'pass' || value === 'fail' || value === 'skipped') {
+    return value
+  }
+  return null
+}
+
+function applyResultFilterFromRouteQuery(options?: { fetch?: boolean }): void {
+  const routeFilter = parseResultFilterFromRouteQuery()
+  if (!routeFilter) {
+    return
+  }
+
+  if (controller.resultsQuery.final_status !== routeFilter) {
+    controller.resultsQuery.final_status = routeFilter
+  }
+
+  if (options?.fetch === false) {
+    return
+  }
+
+  controller.applyResultsFilters()
+}
 
 const resultSortOptions = [
   { title: 'Name', value: 'name' },
@@ -108,8 +132,8 @@ async function applyRouteRunId(): Promise<void> {
     return
   }
   controller.setSelectedRun(runId, { fetch: false })
+  applyResultFilterFromRouteQuery({ fetch: false })
   await controller.preloadResultsWithFavorite(runId)
-  maybeOpenRetryFromRouteQuery()
 }
 
 function openFavoriteDialog(): void {
@@ -580,50 +604,6 @@ function formatLocalDateTime(rawValue: string | null | undefined): string {
   return parsed.toLocaleString()
 }
 
-async function retryFailedRowsForCurrentRun(): Promise<void> {
-  const sourceRunId = String(controller.selectedRunId || '').trim()
-  if (!sourceRunId) {
-    return
-  }
-
-  runActionError.value = ''
-  retryFailedBusy.value = true
-  try {
-    const created = await controller.retryFailedRows(sourceRunId)
-    await router.push(`/runs/${created.run_id}`)
-  } catch (err) {
-    runActionError.value = err instanceof Error ? err.message : 'Failed to start retry run'
-  } finally {
-    retryFailedBusy.value = false
-  }
-}
-
-function requestRetryFailedRows(): void {
-  if (!canRetryFailedRows.value || retryFailedBusy.value) {
-    return
-  }
-  retryFailedConfirmOpen.value = true
-}
-
-function maybeOpenRetryFromRouteQuery(): void {
-  const retryQuery = String(route.query.retry ?? '').trim()
-  if (retryQuery !== '1') {
-    return
-  }
-  if (!canRetryFailedRows.value || retryFailedBusy.value) {
-    return
-  }
-  requestRetryFailedRows()
-  const nextQuery = { ...route.query }
-  delete nextQuery.retry
-  void router.replace({ path: route.path, query: nextQuery })
-}
-
-function confirmRetryFailedRows(): void {
-  retryFailedConfirmOpen.value = false
-  void retryFailedRowsForCurrentRun()
-}
-
 const selectedResultTitle = computed(() => {
   if (!selectedResult.value) {
     return 'Result Details'
@@ -743,17 +723,6 @@ const selectedRunCooldownRemainingText = computed(() => {
   return `${seconds}s`
 })
 
-const canRetryFailedRows = computed(() => {
-  const run = controller.selectedRun
-  if (!run) {
-    return false
-  }
-  if (selectedRunIsActive.value) {
-    return false
-  }
-  return Number(run.skipped_count || 0) > 0
-})
-
 const activeAdvancedFilters = computed(() => {
   const items: string[] = []
   if (controller.resultsQuery.final_status && controller.resultsQuery.final_status !== 'all') {
@@ -867,9 +836,9 @@ watch(
 )
 
 watch(
-  () => route.query.retry,
+  () => route.query.result,
   () => {
-    maybeOpenRetryFromRouteQuery()
+    applyResultFilterFromRouteQuery()
   },
 )
 </script>
@@ -891,7 +860,7 @@ watch(
             <v-chip v-if="controller.selectedRunId" variant="tonal" size="small">{{ controller.selectedRunId.slice(0, 8) }}</v-chip>
             <v-btn
               variant="flat"
-              color="secondary"
+              color="primary"
               :disabled="!controller.selectedRunId"
               @click="requestFilteredResultsDownload"
             >
@@ -947,24 +916,9 @@ watch(
                   <v-chip size="small" variant="tonal" color="primary">
                     {{ controller.selectedRun.stage || controller.selectedRun.status }}
                   </v-chip>
-                  <v-chip size="small" variant="tonal" color="secondary">
-                    Retries {{ controller.selectedRun.retry_count || 0 }}
-                  </v-chip>
                   <v-chip v-if="selectedRunCooldownText" size="small" variant="outlined" color="warning">
                     Cooldown {{ selectedRunCooldownRemainingText }} (until {{ selectedRunCooldownText }})
                   </v-chip>
-                </div>
-                <div class="d-flex align-center ga-2 flex-wrap">
-                  <v-btn
-                    variant="tonal"
-                    color="secondary"
-                    prepend-icon="mdi-restart"
-                    :loading="retryFailedBusy"
-                    :disabled="!canRetryFailedRows"
-                    @click="requestRetryFailedRows"
-                  >
-                    Retry Failed Rows
-                  </v-btn>
                 </div>
               </div>
               <div class="text-body-2 text-medium-emphasis mt-1">{{ selectedRunStatusMessage }}</div>
@@ -1018,7 +972,7 @@ watch(
                       icon="mdi-star-outline"
                       size="small"
                       variant="tonal"
-                      color="secondary"
+                      color="warning"
                       :disabled="!hasSelectedSavedFavorite"
                       @click="setSelectedFavoriteAsDefault"
                     />
@@ -1031,7 +985,7 @@ watch(
                       icon="mdi-pencil-outline"
                       size="small"
                       variant="tonal"
-                      color="secondary"
+                      color="primary"
                       :disabled="!hasSelectedSavedFavorite"
                       @click="openRenameFavoriteDialog"
                     />
@@ -1096,7 +1050,7 @@ watch(
                     </v-btn>
                     <v-btn
                       variant="tonal"
-                      color="secondary"
+                      color="primary"
                       prepend-icon="mdi-refresh"
                       :loading="controller.loadingResults"
                       @click="refreshLivePrices"
@@ -1223,7 +1177,7 @@ watch(
                         icon="mdi-open-in-new"
                         size="small"
                         variant="tonal"
-                        color="secondary"
+                        color="primary"
                         :disabled="!getScreenerUrl(item)"
                         @click="openScreenerForRow(item)"
                       />
@@ -1603,34 +1557,6 @@ watch(
         </v-card>
       </v-dialog>
 
-      <v-dialog v-model="retryFailedConfirmOpen" max-width="500">
-        <v-card>
-          <v-card-title>Retry Failed Rows</v-card-title>
-          <v-card-text>
-            This will create a new run containing only retryable error rows from the current run.
-            Continue?
-          </v-card-text>
-          <v-card-actions class="justify-end">
-            <v-btn
-              variant="text"
-              color="secondary"
-              :disabled="retryFailedBusy"
-              @click="retryFailedConfirmOpen = false"
-            >
-              Cancel
-            </v-btn>
-            <v-btn
-              variant="flat"
-              color="primary"
-              :loading="retryFailedBusy"
-              @click="confirmRetryFailedRows"
-            >
-              Yes, Start Retry Run
-            </v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-dialog>
-
       <v-snackbar
         v-model="copyToastOpen"
         timeout="1500"
@@ -1671,8 +1597,8 @@ watch(
 
 .run-progress-strip {
   padding: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.82) 100%);
+  border: 1px solid #e2e5ea;
+  background: #f7f8fa;
 }
 
 .run-progress-strip-header {

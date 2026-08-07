@@ -169,39 +169,41 @@ def login(payload: LoginRequest, response: Response) -> AuthStatusResponse:
     if not has_any_user():
         raise HTTPException(status_code=409, detail="No account found. Please sign up first.")
 
-    username = normalize_email(payload.username)
-    if not is_valid_email(username):
+    email = normalize_email(payload.email)
+    if not is_valid_email(email):
         raise HTTPException(status_code=400, detail="Email is invalid")
-    if not verify_credentials(username, payload.password):
+    if not verify_credentials(email, payload.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = create_session(username)
+    token = create_session(email)
     response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
     return AuthStatusResponse(
         authenticated=True,
-        username=username,
+        email=email,
+        username=email,
         signup_required=False,
     )
 
 
 @app.post("/api/auth/signup", response_model=AuthStatusResponse)
 def signup(payload: SignupRequest, response: Response) -> AuthStatusResponse:
-    username = normalize_email(payload.username)
+    email = normalize_email(payload.email)
     password = payload.password
-    if not is_valid_email(username):
+    if not is_valid_email(email):
         raise HTTPException(status_code=400, detail="Email is invalid")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    created = create_user(username, password)
+    created = create_user(email, password)
     if not created:
         raise HTTPException(status_code=409, detail="Email already exists")
 
-    token = create_session(username)
+    token = create_session(email)
     response.set_cookie(key=SESSION_COOKIE_NAME, value=token, **_cookie_kwargs())
     return AuthStatusResponse(
         authenticated=True,
-        username=username,
+        email=email,
+        username=email,
         signup_required=False,
     )
 
@@ -221,6 +223,7 @@ def logout(request: Request, response: Response) -> AuthStatusResponse:
     response.delete_cookie(**delete_kwargs)
     return AuthStatusResponse(
         authenticated=False,
+        email=None,
         username=None,
         signup_required=not has_any_user(),
     )
@@ -229,16 +232,18 @@ def logout(request: Request, response: Response) -> AuthStatusResponse:
 @app.get("/api/auth/me", response_model=AuthStatusResponse)
 def me(request: Request) -> AuthStatusResponse:
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
-    username = get_session_username(token)
-    if not username:
+    email = get_session_username(token)
+    if not email:
         return AuthStatusResponse(
             authenticated=False,
+            email=None,
             username=None,
             signup_required=not has_any_user(),
         )
     return AuthStatusResponse(
         authenticated=True,
-        username=username,
+        email=email,
+        username=email,
         signup_required=False,
     )
 
